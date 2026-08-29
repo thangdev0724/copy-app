@@ -1,0 +1,44 @@
+{
+  "name": "clipfull",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lịch sử clipboard cho Windows — xem trọn nội dung từng mục, không cắt ngắn.",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "icons": "node scripts/make-icons.mjs",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "svelte": "^4.2.19",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "vn.local.clipfull",
+    "productName": "ClipFull",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": ["out/**/*", "build/tray*.png", "package.json"],
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ClipFull"
+    }
+  }
+}

@@ -1,0 +1,521 @@
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import Settings from './lib/Settings.svelte';
+
+  const api = window.clipfull;
+
+  let settings = null;
+  let items = [];
+  let query = '';
+  let selectedId = null;
+  let fullText = '';
+  let loadingFull = false;
+  let showSettings = false;
+  let toast = '';
+  let listEl;
+
+  let unsubs = [];
+
+  /**
+   * Cắt hiển thị ở ngưỡng này. Ai đó copy nguyên file log 5MB thì nhét cả vào
+   * DOM là treo cửa sổ — mà treo đúng lúc người ta đang cần dán.
+   */
+  const RENDER_LIMIT = 200_000;
+  let showAll = false;
+
+  $: filtered = filterItems(items, query);
+  $: pinned = filtered.filter((i) => i.pinned);
+  $: rest = filtered.filter((i) => !i.pinned);
+  $: selected = items.find((i) => i.id === selectedId) || null;
+  $: tooLong = fullText.length > RENDER_LIMIT;
+  $: shownText = tooLong && !showAll ? fullText.slice(0, RENDER_LIMIT) : fullText;
+
+  function filterItems(list, q) {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter((i) => i.preview.toLowerCase().includes(needle));
+  }
+
+  async function refresh() {
+    items = await api.items.list();
+    // Mục đang chọn có thể vừa bị xoá; đừng để phần chi tiết trỏ vào hư vô.
+    if (!items.some((i) => i.id === selectedId)) select(items[0]?.id ?? null);
+  }
+
+  async function select(id) {
+    selectedId = id;
+    showAll = false;
+    fullText = '';
+    if (!id) return;
+    loadingFull = true;
+    fullText = await api.items.full(id);
+    loadingFull = false;
+  }
+
+  async function copySelected() {
+    if (!selectedId) return;
+    const result = await api.items.copy(selectedId);
+    if (result?.ok && !settings.seenPasteHint) {
+      // Bản v1 không tự dán, nên phải nói ra một lần — không thì người dùng chọn
+      // xong thấy panel biến mất mà chẳng có gì xảy ra và tưởng app hỏng.
+      await api.settings.set({ seenPasteHint: true });
+      flash('Đã copy — bấm Ctrl + V để dán');
+    }
+  }
+
+  function flash(message) {
+    toast = message;
+    setTimeout(() => (toast = ''), 2600);
+  }
+
+  function move(delta) {
+    const order = [...pinned, ...rest];
+    if (!order.length) return;
+    const at = order.findIndex((i) => i.id === selectedId);
+    const next = Math.max(0, Math.min(order.length - 1, (at === -1 ? 0 : at) + delta));
+    select(order[next].id);
+    listEl?.querySelector('.item.active')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function onKey(e) {
+    if (showSettings) {
+      if (e.key === 'Escape') closeSettings();
+      return;
+    }
+    if (e.key === 'Escape') {
+      api.panel.hide();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      move(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      move(-1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      copySelected();
+    } else if (e.key === 'Delete' && selectedId) {
+      e.preventDefault();
+      await api.items.remove(selectedId);
+    }
+  }
+
+  function openSettings() {
+    showSettings = true;
+    api.panel.settingsOpen(true);
+  }
+
+  function closeSettings() {
+    showSettings = false;
+    api.panel.settingsOpen(false);
+  }
+
+  async function patch(p) {
+    settings = await api.settings.set(p);
+  }
+
+  function when(ts) {
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 60) return 'vừa xong';
+    if (diff < 3600) return `${Math.floor(diff / 60)} phút trước`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} giờ trước`;
+    return new Date(ts).toLocaleDateString('vi-VN');
+  }
+
+  function firstLine(text) {
+    const line = text.split('\n').find((l) => l.trim());
+    return (line || '').trim().slice(0, 120);
+  }
+
+  onMount(async () => {
+    settings = await api.settings.get();
+    await refresh();
+
+    unsubs = [
+      api.onItemsChanged(refresh),
+      api.onSettingsChanged((next) => (settings = next)),
+      api.onShowSettings(openSettings),
+      api.onPanelShown(() => {
+        // Mỗi lần mở lại là một lượt dùng mới: xoá ô tìm kiếm, nhảy về mục mới nhất.
+        query = '';
+        showSettings = false;
+        api.panel.settingsOpen(false);
+        refresh();
+        document.querySelector('.search')?.focus();
+      })
+    ];
+  });
+
+  onDestroy(() => unsubs.forEach((fn) => fn?.()));
+</script>
+
+<svelte:window on:keydown={onKey} />
+
+{#if settings}
+  <div
+    class="app"
+    class:compact={settings.density === 'compact'}
+    data-theme={settings.theme}
+    style="--accent: {settings.accent}; --font: {settings.fontSize}px"
+  >
+    {#if showSettings}
+      <Settings {settings} onPatch={patch} onClose={closeSettings} />
+    {:else}
+      <header class="bar">
+        <input
+          class="search"
+          type="search"
+          bind:value={query}
+          placeholder="Tìm trong lịch sử…"
+          spellcheck="false"
+        />
+        <span class="count">{filtered.length}</span>
+        <button class="icon" title="Cài đặt" on:click={openSettings}>⚙</button>
+        <button class="icon" title="Đóng (Esc)" on:click={() => api.panel.hide()}>✕</button>
+      </header>
+
+      <div class="main">
+        <div class="list" bind:this={listEl}>
+          {#if !filtered.length}
+            <p class="empty">
+              {query ? 'Không có mục nào khớp.' : 'Chưa có gì. Copy một đoạn text để bắt đầu.'}
+            </p>
+          {/if}
+
+          {#if pinned.length}
+            <div class="group">Đã ghim</div>
+            {#each pinned as item (item.id)}
+              <button
+                class="item"
+                class:active={item.id === selectedId}
+                on:click={() => select(item.id)}
+                on:dblclick={copySelected}
+              >
+                <span class="line">{firstLine(item.preview)}</span>
+                <span class="meta">📌 {item.chars} ký tự · {when(item.ts)}</span>
+              </button>
+            {/each}
+          {/if}
+
+          {#if rest.length && pinned.length}
+            <div class="group">Gần đây</div>
+          {/if}
+          {#each rest as item (item.id)}
+            <button
+              class="item"
+              class:active={item.id === selectedId}
+              on:click={() => select(item.id)}
+              on:dblclick={copySelected}
+            >
+              <span class="line">{firstLine(item.preview)}</span>
+              <span class="meta">
+                {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
+              </span>
+            </button>
+          {/each}
+        </div>
+
+        <div class="detail">
+          {#if selected}
+            <div class="detail-bar">
+              <span class="detail-meta">
+                {selected.chars} ký tự · {selected.lines} dòng · {when(selected.ts)}
+              </span>
+              <button class="icon" title="Ghim" on:click={() => api.items.pin(selected.id)}>
+                {selected.pinned ? '📌' : '📍'}
+              </button>
+              <button class="icon" title="Xoá" on:click={() => api.items.remove(selected.id)}>🗑</button>
+              <button class="primary" on:click={copySelected}>Copy (Enter)</button>
+            </div>
+
+            {#if loadingFull}
+              <p class="empty">Đang đọc…</p>
+            {:else}
+              <pre class="content" class:mono={settings.monospaceDetail}>{shownText}</pre>
+              {#if tooLong && !showAll}
+                <div class="more">
+                  Đang hiện {RENDER_LIMIT.toLocaleString('vi-VN')} / {fullText.length.toLocaleString('vi-VN')}
+                  ký tự đầu.
+                  <button on:click={() => (showAll = true)}>Hiện tất cả</button>
+                </div>
+              {/if}
+            {/if}
+          {:else}
+            <p class="empty">Chọn một mục để xem trọn nội dung.</p>
+          {/if}
+        </div>
+      </div>
+
+      <footer class="bar foot">
+        <span>↑↓ chọn · Enter copy · Del xoá · Esc đóng</span>
+        <span class="grow"></span>
+        {#if settings.paused}<span class="paused">Đang tạm dừng</span>{/if}
+        <button class="link" on:click={() => api.items.clear()}>Xoá tất cả (giữ mục ghim)</button>
+      </footer>
+    {/if}
+
+    {#if toast}<div class="toast">{toast}</div>{/if}
+  </div>
+{/if}
+
+<style>
+  :global(:root) {
+    --bg: #ffffff;
+    --fg: #0f172a;
+    --muted: #64748b;
+    --line: rgba(15, 23, 42, 0.12);
+    --field: #f8fafc;
+    --sel: rgba(37, 99, 235, 0.12);
+  }
+  :global(:root:not([data-theme='light'])) {
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(.app[data-theme='system']) {
+      --bg: #0f172a;
+      --fg: #e2e8f0;
+      --muted: #94a3b8;
+      --line: rgba(148, 163, 184, 0.22);
+      --field: #1e293b;
+      --sel: rgba(59, 130, 246, 0.22);
+    }
+  }
+  :global(.app[data-theme='dark']) {
+    --bg: #0f172a;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --line: rgba(148, 163, 184, 0.22);
+    --field: #1e293b;
+    --sel: rgba(59, 130, 246, 0.22);
+  }
+  :global(body) {
+    margin: 0;
+    overflow: hidden;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg);
+    color: var(--fg);
+    font: var(--font, 14px) / 1.55 -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+    -webkit-app-region: drag;
+  }
+  .bar input,
+  .bar button {
+    -webkit-app-region: no-drag;
+  }
+  .foot {
+    border-bottom: 0;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .grow {
+    flex: 1;
+  }
+  .paused {
+    color: #b45309;
+    font-weight: 600;
+  }
+
+  .search {
+    flex: 1;
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+  }
+  .search:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .count {
+    font-size: 11.5px;
+    color: var(--muted);
+    min-width: 26px;
+    text-align: right;
+  }
+
+  .main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+  .list {
+    width: 40%;
+    min-width: 240px;
+    max-width: 420px;
+    overflow: auto;
+    border-right: 1px solid var(--line);
+    padding: 6px;
+  }
+  .group {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    padding: 8px 8px 4px;
+  }
+  .item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    padding: 9px 10px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+  .compact .item {
+    padding: 6px 10px;
+  }
+  .item:hover {
+    background: var(--field);
+  }
+  .item.active {
+    background: var(--sel);
+  }
+  .line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .compact .meta {
+    display: none;
+  }
+
+  .detail {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .detail-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+  }
+  .detail-meta {
+    flex: 1;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .content {
+    flex: 1;
+    margin: 0;
+    padding: 12px 14px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
+    user-select: text;
+  }
+  .content.mono {
+    font-family: ui-monospace, Consolas, 'Courier New', monospace;
+    font-size: 0.92em;
+  }
+  .more {
+    padding: 8px 14px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .empty {
+    color: var(--muted);
+    font-size: 12.5px;
+    padding: 18px;
+    text-align: center;
+  }
+
+  button.icon {
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 4px 7px;
+    border-radius: 7px;
+  }
+  button.icon:hover {
+    background: var(--field);
+  }
+  button.primary {
+    border: 0;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button.link {
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .more button {
+    border: 1px solid var(--line);
+    background: var(--field);
+    color: var(--fg);
+    font: inherit;
+    font-size: 11.5px;
+    padding: 4px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 46px;
+    transform: translateX(-50%);
+    background: #15803d;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 13px;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+  }
+</style>
