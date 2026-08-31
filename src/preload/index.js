@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('clipfull', {
     image: (id) => invoke('items:image', id),
     thumb: (id) => invoke('items:thumb', id),
     pin: (id) => invoke('items:pin', id),
+    mask: (id) => invoke('items:mask', id),
     remove: (id) => invoke('items:remove', id),
     clear: () => invoke('items:clear')
   },
@@ -50,7 +51,8 @@ contextBridge.exposeInMainWorld('clipfull', {
   app: {
     quit: () => invoke('app:quit'),
     paths: () => invoke('app:paths'),
-    diagnose: () => invoke('clipboard:diagnose')
+    diagnose: () => invoke('clipboard:diagnose'),
+    redactPatterns: () => invoke('redact:patterns')
   },
   onItemsChanged: (fn) => on('items:changed', fn),
   onSettingsChanged: (fn) => on('settings:changed', fn),

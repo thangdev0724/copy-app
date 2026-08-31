@@ -44,6 +44,16 @@ export const DEFAULTS = {
   // 0 = không giới hạn. Đổi thành số item tối đa nếu muốn tự dọn bớt.
   maxItems: 0,
 
+  // 0 = giữ mãi. Mục đã ghim luôn được miễn trừ.
+  retentionDays: 0,
+
+  // Mã hoá index.json và blob bằng safeStorage (Windows: DPAPI).
+  encryptHistory: false,
+
+  // Bỏ qua nội dung trông như bí mật. action: 'skip' (không lưu) | 'mask' (lưu
+  // nhưng che). Mặc định skip — lưu rồi che vẫn là đã ghi nó xuống đĩa một lần.
+  redact: { enabled: true, action: 'skip', patterns: null },
+
   // Đã hiện mẹo "đã copy, bấm Ctrl+V" lần nào chưa.
   seenPasteHint: false
 };
@@ -65,11 +75,12 @@ export function getSettings() {
   if (cache) return cache;
   try {
     cache = { ...DEFAULTS, ...JSON.parse(readFileSync(file(), 'utf8')) };
-    // hotkeys là object lồng: spread ở trên sẽ thay nguyên cụm, phải trộn riêng
-    // để phím tắt mới thêm trong DEFAULTS không biến mất với người dùng cũ.
+    // Object lồng: spread ở trên thay nguyên cụm, phải trộn riêng để trường mới
+    // thêm trong DEFAULTS không biến mất với người dùng cũ.
     cache.hotkeys = { ...DEFAULTS.hotkeys, ...(cache.hotkeys || {}) };
+    cache.redact = { ...DEFAULTS.redact, ...(cache.redact || {}) };
   } catch {
-    cache = { ...DEFAULTS, hotkeys: { ...DEFAULTS.hotkeys } };
+    cache = { ...DEFAULTS, hotkeys: { ...DEFAULTS.hotkeys }, redact: { ...DEFAULTS.redact } };
   }
   return cache;
 }
@@ -77,6 +88,7 @@ export function getSettings() {
 export function setSettings(patch) {
   const next = { ...getSettings(), ...patch };
   if (patch.hotkeys) next.hotkeys = { ...getSettings().hotkeys, ...patch.hotkeys };
+  if (patch.redact) next.redact = { ...getSettings().redact, ...patch.redact };
 
   // Chặn dưới để panel không bao giờ mờ tới mức không thấy mà bấm.
   next.opacity = clamp(next.opacity, MIN_OPACITY, 1, DEFAULTS.opacity);
@@ -85,6 +97,7 @@ export function setSettings(patch) {
 
   // 0 ở đây KHÔNG phải giá trị hỏng — nó có nghĩa là "không giới hạn".
   next.maxItems = Math.round(clamp(next.maxItems, 0, Number.MAX_SAFE_INTEGER, 0));
+  next.retentionDays = Math.round(clamp(next.retentionDays, 0, 3650, 0));
 
   // Ô nhập kích thước cho gõ tay, mà gõ 20 vào ô "Rộng" thì panel biến mất khỏi
   // tầm với — Electron tự chặn ở minWidth nhưng settings.json vẫn giữ số bậy.

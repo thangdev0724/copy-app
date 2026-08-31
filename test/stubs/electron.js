@@ -36,3 +36,33 @@ export const clipboard = {
     return buf;
   }
 };
+
+/**
+ * safeStorage giả lập.
+ *
+ * KHÔNG phải mã hoá thật — chỉ là một phép biến đổi đảo ngược được, đủ để test
+ * xác nhận dữ liệu đi qua đúng đường seal/open và đọc lại ra nguyên bản. Test
+ * cũng bật/tắt được `available` để kiểm nhánh máy không hỗ trợ.
+ */
+let encryptionAvailable = true;
+
+export function __setEncryptionAvailable(on) {
+  encryptionAvailable = Boolean(on);
+}
+
+const SCRAMBLE = 0x5a;
+
+export const safeStorage = {
+  isEncryptionAvailable: () => encryptionAvailable,
+  encryptString: (text) => {
+    const buf = Buffer.from(text, 'utf8');
+    return Buffer.from(buf.map((b) => b ^ SCRAMBLE));
+  },
+  decryptString: (buffer) => {
+    if (!Buffer.isBuffer(buffer)) throw new TypeError('cần Buffer');
+    // Không có khoá thì KHÔNG giải mã được — đây chính là cảnh đổi máy hoặc đổi
+    // tài khoản Windows, và là nhánh quan trọng nhất phải test.
+    if (!encryptionAvailable) throw new Error('không lấy được khoá giải mã');
+    return Buffer.from(buffer.map((b) => b ^ SCRAMBLE)).toString('utf8');
+  }
+};

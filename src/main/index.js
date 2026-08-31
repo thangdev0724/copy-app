@@ -12,6 +12,8 @@ import * as store from './store.js';
 import * as watcher from './watcher.js';
 import * as hotkey from './hotkey.js';
 import * as tray from './tray.js';
+import * as redact from './redact.js';
+import * as crypt from './crypt.js';
 import {
   createWindow,
   showPanel,
@@ -43,8 +45,14 @@ function main() {
   app.whenReady().then(() => {
     const settings = getSettings();
 
+    // Bật mã hoá TRƯỚC khi load: crypt.open() tự nhận ra file đã mã hoá hay
+    // chưa, nhưng mọi lần ghi sau đó phải theo đúng lựa chọn của người dùng.
+    crypt.setEnabled(settings.encryptHistory);
+
     store.load();
     const loadError = store.takeLoadError();
+    store.sweepExpired(settings.retentionDays);
+    startRetentionSweep();
     store.setMaxItems(settings.maxItems);
     store.sweepOrphanBlobs();
     store.onChange(() => send('items:changed'));
@@ -106,6 +114,7 @@ function main() {
   app.on('will-quit', () => {
     hotkey.unregisterAll();
     watcher.stop();
+    clearInterval(retentionTimer);
     store.flush(); // chưa kịp ghi thì ghi nốt, đừng để mất
   });
 }
@@ -129,10 +138,41 @@ function startWatching() {
     pollMs: settings.pollMs,
     captureImages: settings.captureImages,
     captureFiles: settings.captureFiles,
-    onText: (text) => store.addText(text),
+    onText: (text) => addTextGuarded(text),
     onFiles: (paths) => store.addFiles(paths),
     onImage: (image) => store.addImage(prepareImage(image))
   });
+}
+
+/**
+ * Cửa duy nhất mà text đi vào lịch sử — nên cũng là chỗ duy nhất cần đặt bộ lọc
+ * bí mật. store.js không phải biết gì về khái niệm "bí mật".
+ */
+function addTextGuarded(text) {
+  const { redact: rules } = getSettings();
+  if (!rules?.enabled) return store.addText(text);
+
+  const found = redact.scan(text, rules.patterns ?? undefined);
+  if (!found.length) return store.addText(text);
+
+  // 'skip' là mặc định: lưu rồi che thì nội dung gốc vẫn đã kịp nằm trên đĩa
+  // một lần. Không lưu là lựa chọn duy nhất thật sự an toàn.
+  if (rules.action !== 'mask') return null;
+
+  const item = store.addText(redact.mask(text, rules.patterns ?? undefined));
+  if (item) store.toggleMask(item.id);
+  return item;
+}
+
+/** Quét mục quá hạn mỗi giờ — app chạy nền hàng tuần liền là chuyện bình thường. */
+const RETENTION_SWEEP_MS = 60 * 60 * 1000;
+let retentionTimer = null;
+
+function startRetentionSweep() {
+  clearInterval(retentionTimer);
+  retentionTimer = setInterval(() => {
+    store.sweepExpired(getSettings().retentionDays);
+  }, RETENTION_SWEEP_MS);
 }
 
 /**
@@ -162,6 +202,10 @@ function applyPatch(patch) {
   const next = setSettings(patch);
 
   if ('maxItems' in patch) store.setMaxItems(next.maxItems);
+  if ('retentionDays' in patch) store.sweepExpired(next.retentionDays);
+  if ('encryptHistory' in patch && before.encryptHistory !== next.encryptHistory) {
+    applyEncryption(next.encryptHistory);
+  }
   // Gọi vô điều kiện: window.js giữ bản sao settings riêng để dùng lúc blur và
   // lúc tính độ mờ. Chỉ đồng bộ khi đổi opacity/background là để nó ôm bản cũ —
   // tắt "tự ẩn khi bấm ra ngoài" mà panel vẫn ẩn cho tới lần mở kế.
@@ -176,6 +220,29 @@ function applyPatch(patch) {
   }
   send('settings:changed', next);
   return next;
+}
+
+/**
+ * Bật/tắt mã hoá rồi ghi lại toàn bộ dữ liệu.
+ *
+ * Máy không hỗ trợ safeStorage thì store.reseal() trả về false — phải nói ra và
+ * chỉnh lại setting cho khớp thực tế, không để giao diện hiện "đã bật" trong
+ * khi trên đĩa vẫn là chữ thường.
+ */
+function applyEncryption(enable) {
+  const applied = store.reseal(enable);
+  if (applied === enable) return;
+
+  setSettings({ encryptHistory: applied });
+  dialog.showMessageBox({
+    type: 'warning',
+    title: 'ClipFull',
+    message: 'Không mã hoá được lịch sử',
+    detail:
+      'Windows không cung cấp được khoá mã hoá cho ClipFull trên máy này, nên lịch sử ' +
+      'vẫn được lưu ở dạng chữ thường.',
+    buttons: ['Đã hiểu']
+  });
 }
 
 function applyAutoStart(enabled) {
@@ -213,6 +280,7 @@ function registerIpc() {
   ipcMain.handle('items:full', (_e, id) => store.full(id));
   ipcMain.handle('items:search', (_e, query) => store.search(query));
   ipcMain.handle('items:pin', (_e, id) => store.togglePin(id));
+  ipcMain.handle('items:mask', (_e, id) => store.toggleMask(id));
   ipcMain.handle('items:remove', (_e, id) => store.remove(id));
   ipcMain.handle('items:clear', () => store.clear());
 
@@ -284,6 +352,11 @@ function registerIpc() {
   ipcMain.handle('hotkey:active', () => hotkey.activeHotkeys());
 
   ipcMain.handle('clipboard:diagnose', () => watcher.diagnose());
+  ipcMain.handle('redact:patterns', () => ({
+    all: redact.ALL_PATTERNS,
+    defaults: redact.DEFAULT_PATTERN_IDS,
+    encryptionAvailable: crypt.isAvailable()
+  }));
 
   ipcMain.handle('panel:hide', () => hidePanel());
   ipcMain.handle('panel:hover', (_e, on) => setHover(on));

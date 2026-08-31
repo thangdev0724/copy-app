@@ -23,6 +23,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { BLOB_MIN_QUERY, cached, countIn } from './search.js';
+import * as crypt from './crypt.js';
 
 /** Trên ngưỡng này thì text ra file riêng thay vì nằm trong index. */
 const INLINE_LIMIT = 64 * 1024;
@@ -88,10 +89,17 @@ export function load() {
 
   let raw;
   try {
-    raw = readFileSync(indexFile(), 'utf8');
-  } catch {
-    items = []; // chưa có file: lần chạy đầu, hoàn toàn bình thường
-    return items;
+    // Đọc dạng Buffer rồi mới mở: file có thể đã mã hoá, mà đọc thẳng ra utf8
+    // là biến dữ liệu nhị phân thành chuỗi rác không cứu lại được.
+    raw = crypt.open(readFileSync(indexFile())).toString('utf8');
+  } catch (error) {
+    // Không có file là chuyện bình thường của lần chạy đầu. Còn giải mã hỏng —
+    // đổi máy, đổi tài khoản Windows — thì phải xử như file hỏng, xem bên dưới.
+    if (error?.code === 'ENOENT') {
+      items = [];
+      return items;
+    }
+    return recoverBrokenIndex();
   }
 
   // File rỗng thường là dấu vết của một lần tắt máy giữa chừng. Không có gì để
@@ -109,8 +117,17 @@ export function load() {
     /* rơi xuống nhánh xử lý file hỏng bên dưới */
   }
 
-  // File có nội dung nhưng đọc không ra. Ghi đè lên nó là xoá vĩnh viễn lịch sử
-  // của người ta trong im lặng — giữ lại bản gốc rồi mới bắt đầu lại từ đầu.
+  return recoverBrokenIndex();
+}
+
+/**
+ * File có nội dung nhưng đọc không ra — hỏng, hoặc mã hoá bằng khoá của một tài
+ * khoản Windows khác.
+ *
+ * Ghi đè lên nó là xoá vĩnh viễn lịch sử của người ta trong im lặng. Giữ lại bản
+ * gốc rồi mới bắt đầu lại từ đầu, và báo cho họ biết nó nằm ở đâu.
+ */
+function recoverBrokenIndex() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backup = join(dir(), `index.corrupt-${stamp}.json`);
   try {
@@ -128,7 +145,7 @@ function persist() {
   const target = indexFile();
   const tmp = `${target}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify({ version: 1, items }), 'utf8');
+    writeFileSync(tmp, crypt.seal(Buffer.from(JSON.stringify({ version: 1, items }), 'utf8')));
     renameSync(tmp, target);
     dirty = false;
   } catch {
@@ -172,7 +189,7 @@ export function full(id) {
   if (!item || item.type === 'image') return '';
   if (typeof item.inline === 'string') return item.inline;
   try {
-    return readFileSync(blobFile(item), 'utf8');
+    return crypt.open(readFileSync(blobFile(item))).toString('utf8');
   } catch {
     return '';
   }
@@ -192,7 +209,7 @@ function readImageFile(id, pick) {
   const item = items.find((i) => i.id === id);
   if (!item || item.type !== 'image') return null;
   try {
-    return readFileSync(pick(item));
+    return crypt.open(readFileSync(pick(item)));
   } catch {
     return null;
   }
@@ -245,7 +262,7 @@ function matchItem(item, needle) {
 
 function readBlob(hash) {
   try {
-    return readFileSync(textBlobFile(hash), 'utf8');
+    return crypt.open(readFileSync(textBlobFile(hash))).toString('utf8');
   } catch {
     return null;
   }
@@ -283,7 +300,7 @@ export function addText(text) {
   } else {
     ensureDirs();
     try {
-      writeFileSync(blobFile(item), value, 'utf8');
+      writeFileSync(blobFile(item), crypt.seal(Buffer.from(value, 'utf8')));
     } catch {
       // Không ghi được blob thì thà giữ mỗi preview còn hơn mất luôn mục này.
       item.truncated = true;
@@ -326,8 +343,8 @@ export function addImage({ png, thumb, width, height }) {
 
   ensureDirs();
   try {
-    writeFileSync(blobFile(item), png);
-    if (thumb?.length) writeFileSync(thumbFile(hash), thumb);
+    writeFileSync(blobFile(item), crypt.seal(png));
+    if (thumb?.length) writeFileSync(thumbFile(hash), crypt.seal(thumb));
   } catch {
     return null; // ghi không được thì đừng ghi một mục trỏ vào hư vô
   }
@@ -387,6 +404,79 @@ export function togglePin(id) {
   item.pinned = !item.pinned;
   schedulePersist();
   emit();
+}
+
+/** Đánh dấu một mục là nhạy cảm: danh sách chỉ hiện dấu chấm, phải bấm mới lộ. */
+export function toggleMask(id) {
+  const item = items.find((i) => i.id === id);
+  if (!item) return;
+  item.masked = !item.masked;
+  schedulePersist();
+  emit();
+}
+
+/**
+ * Xoá những mục quá hạn. Mục đã ghim được miễn trừ — ghim là để giữ lại.
+ *
+ * @param {number} days 0 nghĩa là không giới hạn thời gian.
+ * @returns {number} số mục đã xoá
+ */
+export function sweepExpired(days) {
+  const limit = Number(days) || 0;
+  if (limit <= 0) return 0;
+
+  const cutoff = Date.now() - limit * 24 * 60 * 60 * 1000;
+  const dropped = items.filter((i) => !i.pinned && i.ts < cutoff);
+  if (!dropped.length) return 0;
+
+  items = items.filter((i) => i.pinned || i.ts >= cutoff);
+  dropBlobs(dropped);
+  schedulePersist();
+  emit();
+  return dropped.length;
+}
+
+/**
+ * Ghi lại toàn bộ dữ liệu theo trạng thái mã hoá hiện tại.
+ *
+ * Gọi khi người dùng bật/tắt mã hoá. Thứ tự bắt buộc: ĐỌC hết trước (crypt.open
+ * tự nhận ra file cũ đã mã hoá hay chưa), rồi mới đổi cờ, rồi mới GHI — đổi cờ
+ * trước là đọc file cũ bằng chế độ mới và hỏng sạch.
+ */
+export function reseal(enable) {
+  const payload = [];
+  for (const item of items) {
+    if (item.inline !== undefined) continue;
+    const blob = tryRead(blobFile(item));
+    const thumb = item.type === 'image' ? tryRead(thumbFile(item.hash)) : null;
+    payload.push({ item, blob, thumb });
+  }
+
+  crypt.setEnabled(enable);
+
+  ensureDirs();
+  for (const { item, blob, thumb } of payload) {
+    if (blob) safeWrite(blobFile(item), crypt.seal(blob));
+    if (thumb) safeWrite(thumbFile(item.hash), crypt.seal(thumb));
+  }
+  persist();
+  return crypt.isEnabled();
+}
+
+function tryRead(path) {
+  try {
+    return crypt.open(readFileSync(path));
+  } catch {
+    return null; // đọc không được thì để nguyên file đó, đừng ghi đè lên
+  }
+}
+
+function safeWrite(path, buffer) {
+  try {
+    writeFileSync(path, buffer);
+  } catch {
+    /* đĩa đầy hoặc file bị khoá — lần bật/tắt sau sẽ thử lại */
+  }
 }
 
 export function remove(id) {

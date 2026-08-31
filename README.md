@@ -74,13 +74,49 @@ Tổ hợp có phím `Win` cũng không dùng được: Windows giữ phần l�
 
 ## Riêng tư — đọc trước khi dùng
 
-Lịch sử nằm ở `%APPDATA%/ClipFull/history/index.json`, **chữ thường, không mã
-hoá**. Bất cứ thứ gì bạn copy đều nằm trong đó.
+Lịch sử nằm ở `%APPDATA%/ClipFull/history/index.json`. Bất cứ thứ gì bạn copy đều
+nằm trong đó. Có **ba lớp bảo vệ, và không lớp nào tuyệt đối** — đọc để biết
+chính xác mỗi lớp làm được gì.
 
-ClipFull bỏ qua nội dung được đánh dấu bằng các cờ loại trừ của Windows
-(`Clipboard Viewer Ignore`, `ExcludeClipboardContentFromMonitorProcessing`,
-`CanIncludeInClipboardHistory`) — đây là cách trình quản lý mật khẩu báo "đừng
-lưu cái này".
+### 1. Cờ loại trừ của Windows
+
+ClipFull bỏ qua nội dung được đánh dấu bằng `Clipboard Viewer Ignore`,
+`ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` —
+cách trình quản lý mật khẩu báo "đừng lưu cái này".
+
+### 2. Nhận diện bí mật theo mẫu
+
+Cờ ở trên chỉ bắt được password manager nào *chịu* đặt cờ. Copy một API key từ
+trang web, từ terminal, từ file `.env` thì chẳng có cờ nào cả.
+
+ClipFull nhận ra khoá OpenAI / GitHub / AWS / Google / Slack, JWT, header private
+key, và số thẻ ngân hàng (đã qua kiểm tra Luhn để không bắt nhầm mã đơn hàng).
+Mặc định là **không lưu** chứ không phải "lưu rồi che" — che thì nội dung gốc vẫn
+đã kịp đi qua một lần.
+
+Chỉ nhận những mẫu có dấu hiệu riêng, gần như không thể nhầm. Mẫu "chuỗi ngẫu
+nhiên dài" **mặc định tắt**: nó bắt thêm được token của dịch vụ không có tiền tố
+riêng, nhưng cũng bắt nhầm mã băm và id ngẫu nhiên — tức là lặng lẽ vứt đi nội
+dung hợp lệ của bạn, mà bạn không bao giờ biết vì sao.
+
+### 3. Mã hoá bằng DPAPI
+
+Bật trong Cài đặt. Mã hoá `index.json`, blob text **và ảnh** bằng `safeStorage`
+của Electron.
+
+**Giới hạn, nói thẳng:** DPAPI gắn khoá với *tài khoản Windows* đang đăng nhập.
+Nó chặn được người bê ổ cứng đi đọc, hoặc mở file bằng tài khoản khác. Nó **không**
+chặn được phần mềm khác đang chạy dưới chính tài khoản của bạn — thứ đó giải mã
+được y như ClipFull.
+
+Đổi máy hoặc đổi tài khoản Windows thì không giải mã được nữa. Lúc đó ClipFull
+**không xoá im lặng**: file được giữ lại thành `index.corrupt-<thời điểm>.json`
+và app báo cho bạn biết nó nằm ở đâu.
+
+### Ngoài ra
+
+- **Tự xoá sau N ngày** (`retentionDays`) — mục đã ghim được miễn trừ.
+- **Đánh dấu một mục là nhạy cảm** — danh sách chỉ hiện dấu chấm, phải bấm mới lộ.
 
 **Đã kiểm chứng đến đâu:** với `Clipboard Viewer Ignore` thì có — đặt clipboard
 kèm cờ này thì nội dung không được lưu, đối chứng cùng nội dung không kèm cờ thì
@@ -90,9 +126,6 @@ nói rõ `clipboard.has()` đọc được tới đâu trong đám format tuỳ 
 Và kể cả cả ba cờ đều chạy, cơ chế này chỉ bắt được trình quản lý mật khẩu nào
 *chịu* đặt cờ. Hãy tự kiểm tra bằng nút **Chẩn đoán clipboard** trong Cài đặt:
 copy một mật khẩu rồi bấm nút đó, nếu `excluded` là `true` thì cơ chế đang chạy.
-
-Nếu `index.json` hỏng, ClipFull **không** ghi đè lên nó: file được giữ lại thành
-`index.corrupt-<thời điểm>.json` và app báo cho bạn biết nó nằm ở đâu.
 
 Ngoài ra: nút **Tạm dừng** ở khay hệ thống, và **Xoá tất cả** (giữ lại mục ghim).
 
@@ -108,6 +141,8 @@ src/main/
   tray.js      khay hệ thống — đường vào dự phòng
   settings.js  cấu hình
   search.js    đếm khớp toàn văn + cache LRU theo hash nội dung
+  redact.js    nhận diện bí mật theo mẫu (Luhn cho số thẻ)
+  crypt.js     mã hoá đĩa bằng safeStorage/DPAPI
 src/preload/   cầu IPC (contextIsolation bật)
 src/renderer/src/
   App.svelte           master/detail, phím tắt, ghép các mảnh
@@ -176,6 +211,4 @@ một tấm ảnh.
 - **Tự động dán** vào ứng dụng đang dùng: nhớ cửa sổ foreground → trả focus →
   gửi `Ctrl+V`. Cần native module (nut.js hoặc addon N-API). Đây là thứ tách app
   này khỏi cảm giác "còn thiếu một bước".
-- **Mã hoá `index.json`** bằng `safeStorage` của Electron (dùng DPAPI của
-  Windows). Đọc/ghi index đã gom vào một chỗ nên thay được dễ.
 - Native clipboard listener thay polling, nếu thấy sót lần copy.

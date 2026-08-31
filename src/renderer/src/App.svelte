@@ -39,6 +39,9 @@
   let rawView = false;
   let detailEl;
 
+  /** Mục nhạy cảm đã được bấm để lộ nội dung. Đóng lại mỗi khi đổi mục. */
+  let revealed = false;
+
   /** Mục được ghim làm vế TRÁI của phép so sánh (Ctrl+D). */
   let compareId = null;
   let compareText = '';
@@ -142,6 +145,7 @@
     // lên một đoạn văn xuôi là vô nghĩa.
     transformId = null;
     rawView = false;
+    revealed = false;
     if (!id) return;
     loadingFull = true;
     fullText = await api.items.full(id);
@@ -366,7 +370,9 @@
                 {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
                   >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
                   >{:else if item.type === 'files'}<span class="kind">📁</span
-                  >{/if}{firstLine(item.preview)}
+                  >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
+                    item.preview
+                  )}{/if}
               </span>
                 <span class="meta">📌 {item.chars} ký tự · {when(item.ts)}</span>
               </button>
@@ -387,7 +393,9 @@
                 {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
                   >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
                   >{:else if item.type === 'files'}<span class="kind">📁</span
-                  >{/if}{firstLine(item.preview)}
+                  >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
+                    item.preview
+                  )}{/if}
               </span>
               <span class="meta">
                 {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
@@ -419,12 +427,22 @@
               <button class="icon" title="Ghim" on:click={() => api.items.pin(selected.id)}>
                 {selected.pinned ? '📌' : '📍'}
               </button>
+              <button
+                class="icon"
+                title={selected.masked ? 'Bỏ đánh dấu nhạy cảm' : 'Đánh dấu là nhạy cảm'}
+                on:click={() => api.items.mask(selected.id)}>{selected.masked ? '🔒' : '🔓'}</button
+              >
               <button class="icon" title="Xoá" on:click={() => api.items.remove(selected.id)}>🗑</button>
               <button class="primary" on:click={copySelected}>Copy (Enter)</button>
             </div>
 
             {#if loadingFull}
               <p class="empty">Đang đọc…</p>
+            {:else if selected.masked && !revealed}
+              <div class="hidden-item">
+                <p>Mục này được đánh dấu là nhạy cảm.</p>
+                <button class="primary" on:click={() => (revealed = true)}>Hiện nội dung</button>
+              </div>
             {:else}
               <DetailPane
                 item={selected}
@@ -625,6 +643,19 @@
   .kind {
     margin-right: 4px;
     opacity: 0.85;
+  }
+  .hidden-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .hidden-item p {
+    margin: 0;
   }
 
   .detail {

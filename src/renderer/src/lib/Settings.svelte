@@ -9,6 +9,22 @@
 
   let diagnosis = null;
   let paths = null;
+  let redact = null;
+
+  loadRedact();
+
+  async function loadRedact() {
+    redact = await api.app.redactPatterns();
+  }
+
+  /** Bật/tắt một mẫu nhận diện. `patterns` null nghĩa là "dùng bộ mặc định". */
+  function togglePattern(id, on) {
+    const current = settings.redact.patterns ?? redact.defaults;
+    const next = on ? [...new Set([...current, id])] : current.filter((x) => x !== id);
+    onPatch({ redact: { patterns: next } });
+  }
+
+  const patternOn = (id) => (settings.redact.patterns ?? redact?.defaults ?? []).includes(id);
 
   const CORNERS = [
     ['bottom-right', 'Dưới phải'],
@@ -246,11 +262,87 @@
     <section>
       <h3>Riêng tư</h3>
       <p class="hint">
-        Lịch sử nằm ở <code>index.json</code> dạng <b>chữ thường, không mã hoá</b>. Bất cứ thứ gì
-        bạn copy — kể cả mật khẩu — đều nằm trong đó. ClipFull cố gắng bỏ qua nội dung được
-        trình quản lý mật khẩu đánh dấu, nhưng <b>chưa được kiểm chứng</b> là Electron đọc được
-        các dấu đó trên máy bạn hay không.
+        Lịch sử nằm ở <code>index.json</code>. Bất cứ thứ gì bạn copy — kể cả mật khẩu — đều
+        nằm trong đó. Có ba lớp bảo vệ, và không lớp nào là tuyệt đối: cờ loại trừ của Windows
+        (chỉ bắt được trình quản lý mật khẩu nào <i>chịu</i> đặt cờ), bộ nhận diện bí mật bên
+        dưới, và mã hoá bằng DPAPI.
       </p>
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.encryptHistory}
+          on:change={(e) => onPatch({ encryptHistory: e.target.checked })}
+          disabled={redact && !redact.encryptionAvailable}
+        />
+        <span>Mã hoá lịch sử trên đĩa</span>
+      </label>
+      <p class="hint tight">
+        {#if redact && !redact.encryptionAvailable}
+          <b>Máy này không dùng được</b> — Windows không cấp được khoá cho ClipFull.
+        {:else}
+          Dùng DPAPI của Windows. Chặn được người bê ổ cứng đi đọc, hoặc mở file bằng tài khoản
+          khác. <b>Không</b> chặn được phần mềm khác đang chạy dưới chính tài khoản của bạn —
+          thứ đó giải mã được y như ClipFull.
+        {/if}
+      </p>
+
+      <label for="retention">Tự xoá sau bao nhiêu ngày (0 = giữ mãi)</label>
+      <input
+        id="retention"
+        type="number"
+        min="0"
+        max="3650"
+        value={settings.retentionDays}
+        on:change={(e) => onPatch({ retentionDays: Number(e.target.value) })}
+      />
+      <p class="hint tight">Mục đã ghim luôn được giữ lại, bất kể quá hạn.</p>
+
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.redact.enabled}
+          on:change={(e) => onPatch({ redact: { enabled: e.target.checked } })}
+        />
+        <span>Bỏ qua nội dung trông như bí mật</span>
+      </label>
+
+      {#if settings.redact.enabled}
+        <label for="redact-action">Khi phát hiện thì</label>
+        <select
+          id="redact-action"
+          value={settings.redact.action}
+          on:change={(e) => onPatch({ redact: { action: e.target.value } })}
+        >
+          <option value="skip">Không lưu (an toàn nhất)</option>
+          <option value="mask">Vẫn lưu nhưng che đi</option>
+        </select>
+        <p class="hint tight">
+          "Che" nghĩa là nội dung gốc vẫn đã kịp đi qua bộ nhớ một lần rồi mới bị thay —
+          "không lưu" là lựa chọn duy nhất thật sự an toàn.
+        </p>
+
+        {#if redact}
+          <label for="patterns">Nhận diện những loại nào</label>
+          <div class="patterns" id="patterns">
+            {#each redact.all as pattern (pattern.id)}
+              <label class="sw">
+                <input
+                  type="checkbox"
+                  checked={patternOn(pattern.id)}
+                  on:change={(e) => togglePattern(pattern.id, e.target.checked)}
+                />
+                <span>{pattern.label}</span>
+              </label>
+            {/each}
+          </div>
+          <p class="hint tight">
+            <b>Chuỗi ngẫu nhiên dài</b> mặc định tắt: nó bắt được token của dịch vụ không có
+            tiền tố riêng, nhưng cũng bắt nhầm mã băm và id ngẫu nhiên — tức là lặng lẽ vứt đi
+            nội dung hợp lệ của bạn.
+          </p>
+        {/if}
+      {/if}
+
       <div class="row">
         <button on:click={diagnose}>Chẩn đoán clipboard</button>
         <button on:click={showPaths}>Xem chỗ lưu</button>
@@ -403,6 +495,15 @@
     padding: 1px 5px;
     border-radius: 4px;
     font-size: 11.5px;
+  }
+  .patterns {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--field);
   }
   .diag {
     background: var(--field);
