@@ -194,6 +194,29 @@
         <span>Tạm dừng theo dõi clipboard</span>
       </label>
 
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.captureFiles}
+          on:change={(e) => onPatch({ captureFiles: e.target.checked })}
+        />
+        <span>Lưu đường dẫn khi copy file trong Explorer</span>
+      </label>
+
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.captureImages}
+          on:change={(e) => onPatch({ captureImages: e.target.checked })}
+        />
+        <span>Lưu ảnh</span>
+      </label>
+      <p class="hint tight">
+        Mặc định tắt. Nhận ra ảnh đã đổi thì bắt buộc phải giải mã bitmap — thứ đắt nhất
+        trong cả vòng theo dõi — nên ảnh được kiểm bằng một nhịp riêng, chậm hơn (~1,2 giây).
+        Không bật thì không tốn gì.
+      </p>
+
       <label for="poll">Nhịp kiểm tra clipboard — {settings.pollMs}ms</label>
       <input
         id="poll"

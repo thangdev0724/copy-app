@@ -36,6 +36,11 @@ export const DEFAULTS = {
   hideOnBlur: true,
   pollMs: 300,
 
+  // Ảnh mặc định TẮT: nhận diện ảnh đổi buộc phải giải mã bitmap, nên ai không
+  // cần thì không phải trả giá CPU nào. Đường dẫn file thì rẻ nên bật sẵn.
+  captureImages: false,
+  captureFiles: true,
+
   // 0 = không giới hạn. Đổi thành số item tối đa nếu muốn tự dọn bớt.
   maxItems: 0,
 

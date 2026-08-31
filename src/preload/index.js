@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('clipfull', {
     search: (query) => invoke('items:search', query),
     copy: (id) => invoke('items:copy', id),
     copyText: (text) => invoke('items:copyText', text),
+    copyImage: (id) => invoke('items:copyImage', id),
+    image: (id) => invoke('items:image', id),
+    thumb: (id) => invoke('items:thumb', id),
     pin: (id) => invoke('items:pin', id),
     remove: (id) => invoke('items:remove', id),
     clear: () => invoke('items:clear')
@@ -40,6 +43,9 @@ contextBridge.exposeInMainWorld('clipfull', {
     hide: () => invoke('panel:hide'),
     hover: (on) => invoke('panel:hover', on),
     settingsOpen: (open) => invoke('panel:settings-open', open)
+  },
+  shell: {
+    reveal: (path) => invoke('shell:reveal', path)
   },
   app: {
     quit: () => invoke('app:quit'),

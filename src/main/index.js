@@ -6,7 +6,7 @@
  * bắt buộc phải có vì phím tắt có thể bị ứng dụng khác chiếm.
  */
 
-import { app, BrowserWindow, ipcMain, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell } from 'electron';
 import { getSettings, setSettings } from './settings.js';
 import * as store from './store.js';
 import * as watcher from './watcher.js';
@@ -118,17 +118,44 @@ function quit() {
 
 /* ------------------------------------------------------------------ watcher */
 
+/** Bề ngang ảnh thu nhỏ trong danh sách. */
+const THUMB_WIDTH = 160;
+
 function startWatching() {
   const settings = getSettings();
   watcher.stop();
   if (settings.paused) return;
   watcher.start({
     pollMs: settings.pollMs,
-    onText: (text) => store.addText(text)
+    captureImages: settings.captureImages,
+    captureFiles: settings.captureFiles,
+    onText: (text) => store.addText(text),
+    onFiles: (paths) => store.addFiles(paths),
+    onImage: (image) => store.addImage(prepareImage(image))
   });
 }
 
+/**
+ * Đổi NativeImage thành mấy buffer mà store cần.
+ *
+ * Phần đụng tới API ảnh của Electron gom hết vào đây, để store.js chỉ phụ thuộc
+ * `app.getPath` và vẫn test được mà không cần dựng cả runtime Electron.
+ */
+function prepareImage(image) {
+  const { width, height } = image.getSize();
+  const thumbSource = width > THUMB_WIDTH ? image.resize({ width: THUMB_WIDTH }) : image;
+  return {
+    png: image.toPNG(),
+    thumb: thumbSource.toPNG(),
+    width,
+    height
+  };
+}
+
 /* ----------------------------------------------------------------- settings */
+
+/** Đổi bất kỳ cái nào trong số này thì watcher phải dựng lại với tham số mới. */
+const RESTART_WATCHER = ['paused', 'pollMs', 'captureImages', 'captureFiles'];
 
 function applyPatch(patch) {
   const before = getSettings();
@@ -140,7 +167,9 @@ function applyPatch(patch) {
   // tắt "tự ẩn khi bấm ra ngoài" mà panel vẫn ẩn cho tới lần mở kế.
   applyAppearance(next);
   if ('openAtLogin' in patch) applyAutoStart(next.openAtLogin);
-  if ('paused' in patch || (('pollMs' in patch) && !next.paused)) startWatching();
+  if (RESTART_WATCHER.some((key) => key in patch) && (!next.paused || 'paused' in patch)) {
+    startWatching();
+  }
 
   if (before.paused !== next.paused || before.openAtLogin !== next.openAtLogin) {
     tray.refreshTray(next, hotkeyFailed);
@@ -161,6 +190,10 @@ function applyAutoStart(enabled) {
 
 /** Trần cho items:copyText. Không ai copy tay 50 triệu ký tự. */
 const MAX_COPY_CHARS = 50_000_000;
+
+function toDataUrl(png) {
+  return png ? `data:image/png;base64,${png.toString('base64')}` : null;
+}
 
 /**
  * Ghi clipboard rồi ẩn panel.
@@ -202,6 +235,35 @@ function registerIpc() {
     const value = String(text ?? '');
     if (!value || value.length > MAX_COPY_CHARS) return { ok: false };
     return writeClipboard(value);
+  });
+
+  /**
+   * Ảnh đi sang renderer dạng data URL.
+   *
+   * CSP của panel chỉ cho `img-src 'self' data:`, nên đây là đường duy nhất —
+   * và cũng là đường đúng: không phải mở thêm protocol tuỳ biến hay cho renderer
+   * đọc file, chỉ để hiện một tấm ảnh.
+   */
+  ipcMain.handle('items:image', (_e, id) => toDataUrl(store.imageOf(id)));
+  ipcMain.handle('items:thumb', (_e, id) => toDataUrl(store.thumbOf(id)));
+
+  /** Copy một mục ảnh: dựng lại NativeImage từ PNG trên đĩa rồi ghi clipboard. */
+  ipcMain.handle('items:copyImage', (_e, id) => {
+    const png = store.imageOf(id);
+    if (!png) return { ok: false };
+    const image = nativeImage.createFromBuffer(png);
+    if (image.isEmpty()) return { ok: false };
+    clipboard.writeImage(image);
+    watcher.markSelfImage(); // nếu không, nhịp kiểm ảnh thêm lại chính mục này
+    hidePanel();
+    return { ok: true };
+  });
+
+  /** Mở Explorer và trỏ vào đúng file — dùng cho mục đường dẫn file. */
+  ipcMain.handle('shell:reveal', (_e, path) => {
+    if (typeof path !== 'string' || !path) return { ok: false };
+    shell.showItemInFolder(path);
+    return { ok: true };
   });
 
   ipcMain.handle('settings:get', () => getSettings());

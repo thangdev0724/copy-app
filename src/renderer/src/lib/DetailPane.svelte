@@ -13,6 +13,11 @@
   import TableViewer from './viewers/TableViewer.svelte';
   import UrlViewer from './viewers/UrlViewer.svelte';
   import JwtViewer from './viewers/JwtViewer.svelte';
+  import ImageViewer from './viewers/ImageViewer.svelte';
+  import FilesViewer from './viewers/FilesViewer.svelte';
+
+  /** Mục đang xem — cần `type` để biết đây là text, ảnh hay danh sách file. */
+  export let item = null;
 
   export let text = '';
   export let query = '';
@@ -55,61 +60,80 @@
   }
 </script>
 
-<div class="bar">
-  {#if !searching && detected.kind !== 'plain'}
-    <button class="chip" class:on={!raw} on:click={() => (raw = false)}>
-      {KIND_LABEL[detected.kind]}{detected.meta?.lang ? ` · ${detected.meta.lang}` : ''}
-    </button>
-    <button class="chip" class:on={raw} on:click={() => (raw = true)}>Thô</button>
-    <span class="sep"></span>
-  {/if}
+{#if item?.type === 'image'}
+  <div class="body">
+    <ImageViewer {item} />
+  </div>
+{:else if item?.type === 'files'}
+  <div class="body">
+    <FilesViewer paths={item.paths ?? []} />
+  </div>
+{:else}
+  <div class="bar">
+    {#if !searching && detected.kind !== 'plain'}
+      <button class="chip" class:on={!raw} on:click={() => (raw = false)}>
+        {KIND_LABEL[detected.kind]}{detected.meta?.lang ? ` · ${detected.meta.lang}` : ''}
+      </button>
+      <button class="chip" class:on={raw} on:click={() => (raw = true)}>Thô</button>
+      <span class="sep"></span>
+    {/if}
 
-  {#if effectiveKind === 'plain' || effectiveKind === 'code'}
-    <button class="chip" class:on={!wrap} on:click={() => (wrap = !wrap)} title="Không xuống dòng">
-      ⇥ Không wrap
-    </button>
-  {/if}
+    {#if effectiveKind === 'plain' || effectiveKind === 'code'}
+      <button
+        class="chip"
+        class:on={!wrap}
+        on:click={() => (wrap = !wrap)}
+        title="Không xuống dòng"
+      >
+        ⇥ Không wrap
+      </button>
+    {/if}
 
-  {#each transforms as item (item.id)}
-    <button class="chip" class:on={transformId === item.id} on:click={() => toggleTransform(item.id)}>
-      {item.label}
-    </button>
-  {/each}
+    {#each transforms as option (option.id)}
+      <button
+        class="chip"
+        class:on={transformId === option.id}
+        on:click={() => toggleTransform(option.id)}
+      >
+        {option.label}
+      </button>
+    {/each}
 
-  {#if transform}
-    <span class="applied">đang xem bản đã biến đổi — Enter copy bản này</span>
-  {/if}
-</div>
+    {#if transform}
+      <span class="applied">đang xem bản đã biến đổi — Enter copy bản này</span>
+    {/if}
+  </div>
 
-<div class="body">
-  {#if searching}
-    <PlainViewer
-      text={shown}
-      {query}
-      lang={null}
-      showLineNumbers={settings.showLineNumbers}
-      {wrap}
-      mono={settings.monospaceDetail}
-    />
-  {:else if effectiveKind === 'json'}
-    <JsonViewer value={detected.meta.value} />
-  {:else if effectiveKind === 'table'}
-    <TableViewer text={shown} delimiter={detected.meta.delimiter} />
-  {:else if effectiveKind === 'url'}
-    <UrlViewer url={detected.meta} text={shown} />
-  {:else if effectiveKind === 'jwt'}
-    <JwtViewer jwt={detected.meta} />
-  {:else}
-    <PlainViewer
-      text={shown}
-      {query}
-      lang={effectiveKind === 'code' ? detected.meta.lang : null}
-      showLineNumbers={settings.showLineNumbers}
-      {wrap}
-      mono={settings.monospaceDetail}
-    />
-  {/if}
-</div>
+  <div class="body">
+    {#if searching}
+      <PlainViewer
+        text={shown}
+        {query}
+        lang={null}
+        showLineNumbers={settings.showLineNumbers}
+        {wrap}
+        mono={settings.monospaceDetail}
+      />
+    {:else if effectiveKind === 'json'}
+      <JsonViewer value={detected.meta.value} />
+    {:else if effectiveKind === 'table'}
+      <TableViewer text={shown} delimiter={detected.meta.delimiter} />
+    {:else if effectiveKind === 'url'}
+      <UrlViewer url={detected.meta} text={shown} />
+    {:else if effectiveKind === 'jwt'}
+      <JwtViewer jwt={detected.meta} />
+    {:else}
+      <PlainViewer
+        text={shown}
+        {query}
+        lang={effectiveKind === 'code' ? detected.meta.lang : null}
+        showLineNumbers={settings.showLineNumbers}
+        {wrap}
+        mono={settings.monospaceDetail}
+      />
+    {/if}
+  </div>
+{/if}
 
 <style>
   .bar {

@@ -161,6 +161,11 @@
   async function copySelected() {
     if (!selectedId) return;
 
+    // Ảnh không có toàn văn để copy — phải dựng lại NativeImage ở main process.
+    if (selected?.type === 'image') {
+      return finishCopy(await api.items.copyImage(selectedId));
+    }
+
     const picked = selectionInDetail();
     if (picked) return finishCopy(await api.items.copyText(picked));
 
@@ -359,6 +364,8 @@
               >
                 <span class="line">
                 {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
+                  >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
+                  >{:else if item.type === 'files'}<span class="kind">📁</span
                   >{/if}{firstLine(item.preview)}
               </span>
                 <span class="meta">📌 {item.chars} ký tự · {when(item.ts)}</span>
@@ -378,6 +385,8 @@
             >
               <span class="line">
                 {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
+                  >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
+                  >{:else if item.type === 'files'}<span class="kind">📁</span
                   >{/if}{firstLine(item.preview)}
               </span>
               <span class="meta">
@@ -418,6 +427,7 @@
               <p class="empty">Đang đọc…</p>
             {:else}
               <DetailPane
+                item={selected}
                 text={shownText}
                 {query}
                 {settings}
@@ -611,6 +621,10 @@
   .cmp {
     color: var(--accent);
     margin-right: 4px;
+  }
+  .kind {
+    margin-right: 4px;
+    opacity: 0.85;
   }
 
   .detail {

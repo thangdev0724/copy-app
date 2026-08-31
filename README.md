@@ -14,7 +14,8 @@ dung** thay vì một dòng bị cắt cụt bằng dấu ba chấm.
 - Tuỳ chỉnh giao diện: sáng/tối, màu nhấn, cỡ chữ, mật độ, **độ mờ**, nền acrylic/mica
 - Chạy cùng Windows, nằm dưới khay hệ thống
 
-v1 chỉ nhận **text** — copy ảnh thì bỏ qua, không lưu.
+Nhận **text**, **đường dẫn file** (copy file trong Explorer), và **ảnh** —
+ảnh mặc định tắt, xem phần Kiến trúc để biết vì sao.
 
 ## Chạy
 
@@ -101,7 +102,7 @@ Ngoài ra: nút **Tạm dừng** ở khay hệ thống, và **Xoá tất cả** 
 src/main/
   index.js     ghép các mảnh, IPC, vòng đời app
   watcher.js   polling clipboard + đọc cờ loại trừ
-  store.js     lịch sử trên đĩa, dedupe, tách blob
+  store.js     lịch sử trên đĩa, dedupe, tách blob (text/ảnh/file)
   window.js    panel: dựng sẵn lúc boot rồi ẩn
   hotkey.js    đăng ký phím tắt, rollback khi hỏng
   tray.js      khay hệ thống — đường vào dự phòng
@@ -160,12 +161,21 @@ chỗ khớp chứ không cần thấy từ khoá.
 **Tự viết tô màu và nhận diện thay vì kéo Prism/Shiki về.** Dự án giữ nguyên tắc
 không có runtime dependency — `scripts/make-icons.mjs` còn tự tay encode PNG.
 
+**Ảnh có nhịp theo dõi RIÊNG, và mặc định tắt.** Chữ ký rẻ tiền của clipboard chỉ
+gồm danh sách format + hash của text, nên copy ảnh A rồi ảnh B cho ra *cùng một
+chữ ký* — muốn phân biệt thì buộc phải giải mã bitmap, thứ đắt nhất trong cả vòng
+theo dõi. Trộn nó vào nhịp 300ms là đốt CPU cả ngày cho một việc hiếm; tách ra
+nhịp ~1,2 giây và chỉ chạy khi người dùng bật thì ai không cần không trả giá gì.
+
+**Ảnh đi sang renderer bằng data URL.** CSP của panel chỉ cho `img-src 'self'
+data:`, nên không phải mở protocol tuỳ biến hay cho renderer đọc file chỉ để hiện
+một tấm ảnh.
+
 ## Hướng đi tiếp
 
 - **Tự động dán** vào ứng dụng đang dùng: nhớ cửa sổ foreground → trả focus →
   gửi `Ctrl+V`. Cần native module (nut.js hoặc addon N-API). Đây là thứ tách app
   này khỏi cảm giác "còn thiếu một bước".
-- **Ảnh** trong lịch sử (`type` trong data model đã chừa sẵn chỗ).
 - **Mã hoá `index.json`** bằng `safeStorage` của Electron (dùng DPAPI của
   Windows). Đọc/ghi index đã gom vào một chỗ nên thay được dễ.
 - Native clipboard listener thay polling, nếu thấy sót lần copy.

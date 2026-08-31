@@ -52,11 +52,20 @@ export function setMaxItems(value) {
 
 const dir = () => join(app.getPath('userData'), 'history');
 const blobDir = () => join(dir(), 'blobs');
+const thumbDir = () => join(dir(), 'thumbs');
 const indexFile = () => join(dir(), 'index.json');
-const blobFile = (hash) => join(blobDir(), `${hash}.txt`);
+
+/** Đuôi file blob theo loại nội dung. Mục 'files' không có blob — xem addFiles(). */
+const BLOB_EXT = { text: 'txt', image: 'png' };
+
+const blobName = (item) => `${item.hash}.${BLOB_EXT[item.type] ?? 'txt'}`;
+const blobFile = (item) => join(blobDir(), blobName(item));
+const textBlobFile = (hash) => join(blobDir(), `${hash}.txt`);
+const thumbFile = (hash) => join(thumbDir(), `${hash}.png`);
 
 function ensureDirs() {
   mkdirSync(blobDir(), { recursive: true });
+  mkdirSync(thumbDir(), { recursive: true });
 }
 
 /* ---------------------------------------------------------------- vòng đời */
@@ -157,15 +166,35 @@ export function list() {
   return [...pinned, ...rest].map(({ inline, ...meta }) => meta);
 }
 
-/** Toàn văn của một mục — đọc blob nếu mục đó dài. */
+/** Toàn văn của một mục — đọc blob nếu mục đó dài. Ảnh thì không có text. */
 export function full(id) {
   const item = items.find((i) => i.id === id);
-  if (!item) return '';
+  if (!item || item.type === 'image') return '';
   if (typeof item.inline === 'string') return item.inline;
   try {
-    return readFileSync(blobFile(item.hash), 'utf8');
+    return readFileSync(blobFile(item), 'utf8');
   } catch {
     return '';
+  }
+}
+
+/** Dữ liệu PNG của một mục ảnh. Trả null nếu không phải ảnh hoặc file đã mất. */
+export function imageOf(id) {
+  return readImageFile(id, (item) => blobFile(item));
+}
+
+/** Ảnh thu nhỏ cho danh sách — nhẹ hơn nhiều so với dựng ảnh gốc. */
+export function thumbOf(id) {
+  return readImageFile(id, (item) => thumbFile(item.hash));
+}
+
+function readImageFile(id, pick) {
+  const item = items.find((i) => i.id === id);
+  if (!item || item.type !== 'image') return null;
+  try {
+    return readFileSync(pick(item));
+  } catch {
+    return null;
   }
 }
 
@@ -203,7 +232,8 @@ function matchItem(item, needle) {
     return countIn(cached(item.hash, () => item.inline), needle);
   }
 
-  if (needle.length >= BLOB_MIN_QUERY) {
+  // Ảnh không có gì để tìm ngoài dòng mô tả trong preview.
+  if (item.type === 'text' && needle.length >= BLOB_MIN_QUERY) {
     const text = cached(item.hash, () => readBlob(item.hash));
     if (text !== null) return countIn(text, needle);
   }
@@ -215,7 +245,7 @@ function matchItem(item, needle) {
 
 function readBlob(hash) {
   try {
-    return readFileSync(blobFile(hash), 'utf8');
+    return readFileSync(textBlobFile(hash), 'utf8');
   } catch {
     return null;
   }
@@ -235,13 +265,7 @@ export function addText(text) {
 
   const hash = hashOf(value);
   const existing = items.find((i) => i.hash === hash);
-  if (existing) {
-    existing.ts = Date.now();
-    items = [existing, ...items.filter((i) => i !== existing)];
-    schedulePersist();
-    emit();
-    return existing;
-  }
+  if (existing) return bump(existing);
 
   const item = {
     id: `${Date.now()}-${hash.slice(0, 8)}`,
@@ -259,7 +283,7 @@ export function addText(text) {
   } else {
     ensureDirs();
     try {
-      writeFileSync(blobFile(hash), value, 'utf8');
+      writeFileSync(blobFile(item), value, 'utf8');
     } catch {
       // Không ghi được blob thì thà giữ mỗi preview còn hơn mất luôn mục này.
       item.truncated = true;
@@ -267,6 +291,89 @@ export function addText(text) {
     }
   }
 
+  return insert(item);
+}
+
+/**
+ * Thêm một mục ảnh.
+ *
+ * Nhận buffer PNG đã dựng sẵn thay vì nhận NativeImage, để store chỉ phụ thuộc
+ * `app.getPath` — phần đụng tới API ảnh của Electron nằm ở index.js.
+ *
+ * Ảnh LUÔN ra blob, không bao giờ inline: nhét vài MB base64 vào index.json là
+ * biến file danh sách thành thứ phải đọc hết mới mở được panel.
+ */
+export function addImage({ png, thumb, width, height }) {
+  if (!png?.length) return null;
+
+  const hash = createHash('sha1').update(png).digest('hex');
+  const existing = items.find((i) => i.hash === hash);
+  if (existing) return bump(existing);
+
+  const item = {
+    id: `${Date.now()}-${hash.slice(0, 8)}`,
+    type: 'image',
+    hash,
+    ts: Date.now(),
+    pinned: false,
+    width,
+    height,
+    bytes: png.length,
+    chars: 0,
+    lines: 0,
+    preview: `Ảnh ${width}×${height}`
+  };
+
+  ensureDirs();
+  try {
+    writeFileSync(blobFile(item), png);
+    if (thumb?.length) writeFileSync(thumbFile(hash), thumb);
+  } catch {
+    return null; // ghi không được thì đừng ghi một mục trỏ vào hư vô
+  }
+
+  return insert(item);
+}
+
+/**
+ * Thêm một mục "đường dẫn file" (copy file trong Explorer).
+ *
+ * Danh sách đường dẫn nhỏ nên nằm inline luôn — vừa không cần blob, vừa khiến
+ * tìm kiếm và full() chạy đúng mà không phải thêm nhánh riêng nào.
+ */
+export function addFiles(paths) {
+  const list = (paths ?? []).map((path) => String(path)).filter(Boolean);
+  if (!list.length) return null;
+
+  const joined = list.join('\n');
+  const hash = hashOf(joined);
+  const existing = items.find((i) => i.hash === hash);
+  if (existing) return bump(existing);
+
+  return insert({
+    id: `${Date.now()}-${hash.slice(0, 8)}`,
+    type: 'files',
+    hash,
+    ts: Date.now(),
+    pinned: false,
+    paths: list,
+    chars: joined.length,
+    lines: list.length,
+    preview: joined.slice(0, PREVIEW_CHARS),
+    inline: joined
+  });
+}
+
+/** Copy lại thứ đã có: đẩy lên đầu chứ không tạo bản trùng. */
+function bump(item) {
+  item.ts = Date.now();
+  items = [item, ...items.filter((i) => i !== item)];
+  schedulePersist();
+  emit();
+  return item;
+}
+
+function insert(item) {
   items = [item, ...items];
   trim();
   schedulePersist();
@@ -316,8 +423,14 @@ function dropBlob(item) {
   // Hash có thể còn được mục khác dùng chung (cùng nội dung, đã dedupe) —
   // kiểm tra trước khi xoá file.
   if (items.some((i) => i.hash === item.hash)) return;
+
+  remove_(blobFile(item));
+  if (item.type === 'image') remove_(thumbFile(item.hash));
+}
+
+function remove_(path) {
   try {
-    unlinkSync(blobFile(item.hash));
+    unlinkSync(path);
   } catch {
     /* file đã biến mất từ trước */
   }
@@ -336,13 +449,26 @@ function trim() {
   dropBlobs(dropped);
 }
 
-/** Có blob mồ côi khi index hỏng; dọn lúc khởi động cho khỏi phình đĩa. */
+/**
+ * Có blob mồ côi khi index hỏng; dọn lúc khởi động cho khỏi phình đĩa.
+ *
+ * So khớp theo TÊN FILE chứ không theo hash: từ khi có ảnh, một hash có thể ứng
+ * với `<hash>.txt` hoặc `<hash>.png`, nên chỉ so hash là xoá nhầm file của loại
+ * còn lại.
+ */
 export function sweepOrphanBlobs() {
+  const stored = items.filter((i) => i.inline === undefined);
+  sweep(blobDir(), new Set(stored.map(blobName)));
+  sweep(
+    thumbDir(),
+    new Set(stored.filter((i) => i.type === 'image').map((i) => `${i.hash}.png`))
+  );
+}
+
+function sweep(directory, used) {
   try {
-    const used = new Set(items.filter((i) => i.inline === undefined).map((i) => i.hash));
-    for (const name of readdirSync(blobDir())) {
-      const hash = name.replace(/\.txt$/, '');
-      if (!used.has(hash)) unlinkSync(join(blobDir(), name));
+    for (const name of readdirSync(directory)) {
+      if (!used.has(name)) unlinkSync(join(directory, name));
     }
   } catch {
     /* không quét được thì thôi, không đáng để chặn khởi động */
