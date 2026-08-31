@@ -1,6 +1,9 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Settings from './lib/Settings.svelte';
+  import DetailPane from './lib/DetailPane.svelte';
+  import DiffView from './lib/DiffView.svelte';
+  import { TRANSFORMS } from './lib/transform.js';
 
   const api = window.clipfull;
 
@@ -23,17 +26,142 @@
   const RENDER_LIMIT = 200_000;
   let showAll = false;
 
-  $: filtered = filterItems(items, query);
+  /**
+   * Kết quả tìm TOÀN VĂN từ main process: { id: {count, firstIndex} }.
+   * null nghĩa là chưa tìm gì; {} nghĩa là đã tìm và không mục nào khớp.
+   */
+  let searchHits = null;
+  let searchTimer;
+  let matchIndex = 0;
+
+  /** Phép biến đổi đang bật trong pane chi tiết, và cờ ép về xem thô. */
+  let transformId = null;
+  let rawView = false;
+  let detailEl;
+
+  /** Mục nhạy cảm đã được bấm để lộ nội dung. Đóng lại mỗi khi đổi mục. */
+  let revealed = false;
+
+  /** Mục được ghim làm vế TRÁI của phép so sánh (Ctrl+D). */
+  let compareId = null;
+  let compareText = '';
+
+  // So sánh chỉ có nghĩa khi đã chọn đủ hai mục khác nhau.
+  $: comparing = Boolean(compareId && selectedId && compareId !== selectedId);
+  $: compareItem = compareId ? items.find((i) => i.id === compareId) : null;
+
+  /**
+   * Ctrl+D: lần đầu ghim mục đang chọn làm vế trái, lần sau huỷ.
+   * Vế phải chính là mục đang chọn, nên chỉ cần bấm ↑↓ là so với mục khác.
+   */
+  async function toggleCompare() {
+    if (compareId) {
+      compareId = null;
+      compareText = '';
+      return;
+    }
+    if (!selectedId) return;
+    compareId = selectedId;
+    compareText = await api.items.full(compareId);
+    flash('Đã ghim mục này — chọn mục khác để so sánh');
+  }
+
+  function label(item) {
+    if (!item) return '';
+    return firstLine(item.preview) || `${item.chars} ký tự`;
+  }
+
+  const SEARCH_DEBOUNCE = 150;
+
+  $: filtered = sortItems(filterItems(items, query, searchHits), settings?.sortBy);
   $: pinned = filtered.filter((i) => i.pinned);
   $: rest = filtered.filter((i) => !i.pinned);
+  $: groups = settings?.groupByDay ? groupByDay(rest) : [{ label: null, items: rest }];
+  $: order = [...pinned, ...rest];
   $: selected = items.find((i) => i.id === selectedId) || null;
   $: tooLong = fullText.length > RENDER_LIMIT;
   $: shownText = tooLong && !showAll ? fullText.slice(0, RENDER_LIMIT) : fullText;
 
-  function filterItems(list, q) {
+  // Mục đang chọn có khớp, nhưng chỗ khớp nằm ngoài phần đang render.
+  $: hiddenMatch =
+    tooLong && !showAll && selectedId && (searchHits?.[selectedId]?.firstIndex ?? -1) >= RENDER_LIMIT;
+
+  $: scheduleSearch(query);
+
+  /**
+   * Hai tầng lọc. Preview khớp ngay tại renderer để gõ không thấy khựng; kết quả
+   * toàn văn từ main tới sau vài trăm ms rồi trộn thêm vào. Không làm thế thì
+   * mỗi ký tự gõ ra phải chờ một vòng IPC.
+   */
+  function filterItems(list, q, hits) {
     const needle = q.trim().toLowerCase();
     if (!needle) return list;
-    return list.filter((i) => i.preview.toLowerCase().includes(needle));
+    return list.filter((i) => hits?.[i.id] || i.preview.toLowerCase().includes(needle));
+  }
+
+  /**
+   * Sắp theo tần suất thì vẫn lấy thời gian làm tiêu chí phụ — hai mục cùng số
+   * lần dùng mà nhảy chỗ lung tung mỗi lần mở là không dùng được.
+   */
+  function sortItems(list, sortBy) {
+    if (sortBy !== 'frequent') return list;
+    return [...list].sort((a, b) => (b.uses ?? 0) - (a.uses ?? 0) || b.ts - a.ts);
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** Gom theo ngày, mốc tính từ nửa đêm chứ không phải "24 giờ trước". */
+  function groupByDay(list) {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const today = midnight.getTime();
+
+    const out = [];
+    for (const item of list) {
+      const label =
+        item.ts >= today
+          ? 'Hôm nay'
+          : item.ts >= today - DAY
+            ? 'Hôm qua'
+            : new Date(item.ts).toLocaleDateString('vi-VN');
+
+      if (out[out.length - 1]?.label !== label) out.push({ label, items: [] });
+      out[out.length - 1].items.push(item);
+    }
+    return out;
+  }
+
+  function scheduleSearch(q) {
+    clearTimeout(searchTimer);
+    const needle = q.trim();
+    if (!needle) {
+      searchHits = null;
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      const hits = await api.items.search(needle);
+      // Gõ tiếp trong lúc chờ thì kết quả này đã lỗi thời — vứt đi, đừng để nó
+      // ghi đè lên kết quả của chuỗi mới hơn.
+      if (needle === query.trim()) {
+        searchHits = hits;
+        matchIndex = 0;
+      }
+    }, SEARCH_DEBOUNCE);
+  }
+
+  /**
+   * Nhảy giữa các vệt tô trong pane nội dung.
+   *
+   * Đọc thẳng từ DOM thay vì truyền chỉ số xuống qua các component: thứ tự các
+   * thẻ <mark> trong DOM đã đúng là thứ tự xuất hiện, nên không phải đánh số
+   * xuyên qua PlainViewer -> Highlighted rồi ghép lại cho khớp.
+   */
+  function jumpMatch(delta) {
+    const marks = detailEl ? [...detailEl.querySelectorAll('mark')] : [];
+    if (!marks.length) return;
+    matchIndex = (matchIndex + delta + marks.length) % marks.length;
+    marks.forEach((mark, at) => mark.classList.toggle('current', at === matchIndex));
+    marks[matchIndex].scrollIntoView({ block: 'center' });
   }
 
   async function refresh() {
@@ -46,17 +174,77 @@
     selectedId = id;
     showAll = false;
     fullText = '';
+    matchIndex = 0;
+    // Mỗi mục là một thứ khác nhau — giữ lại "Format JSON" từ mục trước rồi áp
+    // lên một đoạn văn xuôi là vô nghĩa.
+    transformId = null;
+    rawView = false;
+    revealed = false;
     if (!id) return;
     loadingFull = true;
     fullText = await api.items.full(id);
     loadingFull = false;
   }
 
+  /**
+   * Ba đường copy, xét theo thứ tự cụ thể dần:
+   *   1. có bôi đen trong pane nội dung -> chỉ copy phần bôi đen
+   *   2. có phép biến đổi đang bật     -> áp lên TOÀN VĂN rồi copy
+   *   3. còn lại                        -> main tự đọc toàn văn từ store
+   *
+   * Chỗ dễ sai: ở bước 2 phải dùng `fullText` chứ không dùng bản đang hiện —
+   * nội dung dài đã bị cắt ở RENDER_LIMIT để khỏi treo DOM, copy bản cắt là
+   * lặng lẽ đưa cho người ta một mẩu cụt.
+   */
   async function copySelected() {
     if (!selectedId) return;
-    const result = await api.items.copy(selectedId);
+
+    // Ảnh không có toàn văn để copy — phải dựng lại NativeImage ở main process.
+    if (selected?.type === 'image') {
+      return finishCopy(await api.items.copyImage(selectedId));
+    }
+
+    const picked = selectionInDetail();
+    if (picked) return finishCopy(await api.items.copyText(picked));
+
+    if (transformId) {
+      const transform = TRANSFORMS.find((t) => t.id === transformId);
+      const transformed = transform?.apply(fullText);
+      if (typeof transformed === 'string' && transformed) {
+        return finishCopy(await api.items.copyText(transformed));
+      }
+    }
+
+    finishCopy(await api.items.copy(selectedId));
+  }
+
+  /** Phần bôi đen, nhưng chỉ khi nó nằm trong pane nội dung. */
+  function selectionInDetail() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !detailEl) return '';
+    if (!detailEl.contains(selection.anchorNode) || !detailEl.contains(selection.focusNode)) {
+      return '';
+    }
+    const picked = selection.toString();
+    return picked.trim() ? picked : '';
+  }
+
+  /**
+   * Paste stack: nhớ mục ngay dưới mục vừa copy, để lần mở panel kế nhảy thẳng
+   * vào đó. Dán liên tiếp 1→2→3 mà không phải bấm mũi tên lại từ đầu.
+   */
+  let stackNextId = null;
+
+  function rememberNext() {
+    if (!settings?.pasteStack) return;
+    const at = order.findIndex((i) => i.id === selectedId);
+    stackNextId = at >= 0 && at + 1 < order.length ? order[at + 1].id : null;
+  }
+
+  async function finishCopy(result) {
+    if (result?.ok) rememberNext();
     if (result?.ok && !settings.seenPasteHint) {
-      // Bản v1 không tự dán, nên phải nói ra một lần — không thì người dùng chọn
+      // Bản này không tự dán, nên phải nói ra một lần — không thì người dùng chọn
       // xong thấy panel biến mất mà chẳng có gì xảy ra và tưởng app hỏng.
       await api.settings.set({ seenPasteHint: true });
       flash('Đã copy — bấm Ctrl + V để dán');
@@ -69,7 +257,6 @@
   }
 
   function move(delta) {
-    const order = [...pinned, ...rest];
     if (!order.length) return;
     const at = order.findIndex((i) => i.id === selectedId);
     const next = Math.max(0, Math.min(order.length - 1, (at === -1 ? 0 : at) + delta));
@@ -83,7 +270,40 @@
       return;
     }
     if (e.key === 'Escape') {
+      // Đang so sánh thì Esc thoát so sánh trước, chứ không đóng luôn cả panel.
+      if (compareId) {
+        compareId = null;
+        compareText = '';
+        return;
+      }
       api.panel.hide();
+      return;
+    }
+    if (e.key === 'd' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleCompare();
+      return;
+    }
+    // Ctrl+F là phản xạ có sẵn của mọi người khi muốn tìm — ô tìm kiếm đã nằm
+    // sẵn trên đầu, chỉ cần đưa con trỏ vào đó.
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      document.querySelector('.search')?.focus();
+      return;
+    }
+    if (e.key === 'F3') {
+      e.preventDefault();
+      jumpMatch(e.shiftKey ? -1 : 1);
+      return;
+    }
+    // Alt+1..9: copy thẳng mục thứ n. Người dùng thuộc lòng "mục 2 là cái
+    // token" thì bỏ hẳn được bước nhìn danh sách.
+    if (e.altKey && /^[1-9]$/.test(e.key)) {
+      const target = order[Number(e.key) - 1];
+      if (target) {
+        e.preventDefault();
+        select(target.id).then(copySelected);
+      }
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -95,10 +315,16 @@
     } else if (e.key === 'Enter') {
       e.preventDefault();
       copySelected();
-    } else if (e.key === 'Delete' && selectedId) {
+    } else if (e.key === 'Delete' && selectedId && !isTyping(e.target)) {
+      // Không chặn thì đang sửa chuỗi tìm kiếm mà bấm Delete là xoá luôn mục
+      // đang chọn — mất dữ liệu vì một phím hoàn toàn vô hại.
       e.preventDefault();
       await api.items.remove(selectedId);
     }
+  }
+
+  function isTyping(target) {
+    return target instanceof HTMLElement && /^(INPUT|TEXTAREA)$/.test(target.tagName);
   }
 
   function openSettings() {
@@ -141,7 +367,11 @@
         query = '';
         showSettings = false;
         api.panel.settingsOpen(false);
-        refresh();
+        const resume = stackNextId;
+        stackNextId = null;
+        refresh().then(() => {
+          if (resume && items.some((i) => i.id === resume)) select(resume);
+        });
         document.querySelector('.search')?.focus();
       })
     ];
@@ -153,11 +383,15 @@
 <svelte:window on:keydown={onKey} />
 
 {#if settings}
+  <!-- Main process không có sự kiện hover ở cấp cửa sổ, nên độ mờ phải do đây báo sang. -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div
     class="app"
     class:compact={settings.density === 'compact'}
     data-theme={settings.theme}
     style="--accent: {settings.accent}; --font: {settings.fontSize}px"
+    on:mouseenter={() => api.panel.hover(true)}
+    on:mouseleave={() => api.panel.hover(false)}
   >
     {#if showSettings}
       <Settings {settings} onPatch={patch} onClose={closeSettings} />
@@ -192,32 +426,67 @@
                 on:click={() => select(item.id)}
                 on:dblclick={copySelected}
               >
-                <span class="line">{firstLine(item.preview)}</span>
+                <span class="line">
+                {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
+                  >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
+                  >{:else if item.type === 'files'}<span class="kind">📁</span
+                  >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
+                    item.preview
+                  )}{/if}
+              </span>
                 <span class="meta">📌 {item.chars} ký tự · {when(item.ts)}</span>
               </button>
             {/each}
           {/if}
 
-          {#if rest.length && pinned.length}
-            <div class="group">Gần đây</div>
-          {/if}
-          {#each rest as item (item.id)}
-            <button
-              class="item"
-              class:active={item.id === selectedId}
-              on:click={() => select(item.id)}
-              on:dblclick={copySelected}
-            >
-              <span class="line">{firstLine(item.preview)}</span>
-              <span class="meta">
-                {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
-              </span>
-            </button>
+          {#each groups as group, at (group.label ?? at)}
+            {#if group.label}
+              <div class="group">{group.label}</div>
+            {:else if pinned.length}
+              <div class="group">Gần đây</div>
+            {/if}
+
+            {#each group.items as item (item.id)}
+              <button
+                class="item"
+                class:active={item.id === selectedId}
+                on:click={() => select(item.id)}
+                on:dblclick={copySelected}
+              >
+                <span class="line">
+                  {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh"
+                      >◧</span
+                    >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
+                    >{:else if item.type === 'files'}<span class="kind">📁</span
+                    >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
+                      item.preview
+                    )}{/if}
+                </span>
+                <span class="meta">
+                  {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
+                  {#if item.uses}· dùng {item.uses} lần{/if}
+                  {#if searchHits?.[item.id]}
+                    · <span class="hits">{searchHits[item.id].count} khớp</span>
+                  {/if}
+                </span>
+              </button>
+            {/each}
           {/each}
         </div>
 
-        <div class="detail">
-          {#if selected}
+        <div class="detail" bind:this={detailEl}>
+          {#if comparing}
+            <DiffView
+              leftText={compareText}
+              rightText={fullText}
+              leftLabel={label(compareItem)}
+              rightLabel={label(selected)}
+              onClose={() => {
+                compareId = null;
+                compareText = '';
+              }}
+            />
+          {:else if selected}
             <div class="detail-bar">
               <span class="detail-meta">
                 {selected.chars} ký tự · {selected.lines} dòng · {when(selected.ts)}
@@ -225,16 +494,36 @@
               <button class="icon" title="Ghim" on:click={() => api.items.pin(selected.id)}>
                 {selected.pinned ? '📌' : '📍'}
               </button>
+              <button
+                class="icon"
+                title={selected.masked ? 'Bỏ đánh dấu nhạy cảm' : 'Đánh dấu là nhạy cảm'}
+                on:click={() => api.items.mask(selected.id)}>{selected.masked ? '🔒' : '🔓'}</button
+              >
               <button class="icon" title="Xoá" on:click={() => api.items.remove(selected.id)}>🗑</button>
               <button class="primary" on:click={copySelected}>Copy (Enter)</button>
             </div>
 
             {#if loadingFull}
               <p class="empty">Đang đọc…</p>
+            {:else if selected.masked && !revealed}
+              <div class="hidden-item">
+                <p>Mục này được đánh dấu là nhạy cảm.</p>
+                <button class="primary" on:click={() => (revealed = true)}>Hiện nội dung</button>
+              </div>
             {:else}
-              <pre class="content" class:mono={settings.monospaceDetail}>{shownText}</pre>
+              <DetailPane
+                item={selected}
+                text={shownText}
+                {query}
+                {settings}
+                bind:transformId
+                bind:raw={rawView}
+              />
               {#if tooLong && !showAll}
                 <div class="more">
+                  {#if hiddenMatch}
+                    <b>Chỗ khớp nằm ngoài phần đang hiện.</b>
+                  {/if}
                   Đang hiện {RENDER_LIMIT.toLocaleString('vi-VN')} / {fullText.length.toLocaleString('vi-VN')}
                   ký tự đầu.
                   <button on:click={() => (showAll = true)}>Hiện tất cả</button>
@@ -248,7 +537,9 @@
       </div>
 
       <footer class="bar foot">
-        <span>↑↓ chọn · Enter copy · Del xoá · Esc đóng</span>
+        <span>
+          ↑↓ chọn · Enter copy · Alt+1..9 copy nhanh · Ctrl+F tìm · Ctrl+D so sánh · Esc đóng
+        </span>
         <span class="grow"></span>
         {#if settings.paused}<span class="paused">Đang tạm dừng</span>{/if}
         <button class="link" on:click={() => api.items.clear()}>Xoá tất cả (giữ mục ghim)</button>
@@ -410,6 +701,31 @@
   .compact .meta {
     display: none;
   }
+  .hits {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .cmp {
+    color: var(--accent);
+    margin-right: 4px;
+  }
+  .kind {
+    margin-right: 4px;
+    opacity: 0.85;
+  }
+  .hidden-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .hidden-item p {
+    margin: 0;
+  }
 
   .detail {
     flex: 1;
@@ -430,19 +746,12 @@
     font-size: 11.5px;
     color: var(--muted);
   }
-  .content {
-    flex: 1;
-    margin: 0;
-    padding: 12px 14px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font: inherit;
-    user-select: text;
-  }
-  .content.mono {
-    font-family: ui-monospace, Consolas, 'Courier New', monospace;
-    font-size: 0.92em;
+  /* Phần cuộn và font của nội dung giờ do DetailPane tự lo. Vệt tô tìm kiếm thì
+     phải khai báo global ở đây: class .current được jumpMatch() gắn qua DOM, nên
+     component Highlighted không nhìn thấy nó lúc biên dịch. */
+  .detail :global(mark.current) {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
   .more {
     padding: 8px 14px;

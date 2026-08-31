@@ -6,18 +6,24 @@
  * bắt buộc phải có vì phím tắt có thể bị ứng dụng khác chiếm.
  */
 
-import { app, BrowserWindow, ipcMain, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell } from 'electron';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { getSettings, setSettings } from './settings.js';
 import * as store from './store.js';
 import * as watcher from './watcher.js';
 import * as hotkey from './hotkey.js';
 import * as tray from './tray.js';
+import * as redact from './redact.js';
+import * as crypt from './crypt.js';
+import * as update from './update.js';
+import pkg from '../../package.json';
 import {
   createWindow,
   showPanel,
   hidePanel,
   togglePanel,
   applyAppearance,
+  setHover,
   setSettingsOpen,
   markQuitting,
   send
@@ -42,7 +48,14 @@ function main() {
   app.whenReady().then(() => {
     const settings = getSettings();
 
+    // Bật mã hoá TRƯỚC khi load: crypt.open() tự nhận ra file đã mã hoá hay
+    // chưa, nhưng mọi lần ghi sau đó phải theo đúng lựa chọn của người dùng.
+    crypt.setEnabled(settings.encryptHistory);
+
     store.load();
+    const loadError = store.takeLoadError();
+    store.sweepExpired(settings.retentionDays);
+    startRetentionSweep();
     store.setMaxItems(settings.maxItems);
     store.sweepOrphanBlobs();
     store.onChange(() => send('items:changed'));
@@ -69,6 +82,23 @@ function main() {
 
     applyAutoStart(settings.openAtLogin);
     startWatching();
+    if (settings.checkUpdates) update.start(update.repoSlug(pkg.repository), announceUpdate);
+
+    // Lịch sử vừa mất mà không nói gì thì người dùng tưởng app tự xoá sạch.
+    // Bản hỏng vẫn còn trên đĩa, phải chỉ cho họ biết nó nằm ở đâu.
+    if (loadError) {
+      dialog.showMessageBox({
+        type: 'warning',
+        title: 'ClipFull',
+        message: 'Không đọc được lịch sử clipboard',
+        detail: loadError.backup
+          ? `File index.json bị hỏng nên ClipFull bắt đầu lại từ đầu.\n\n` +
+            `Bản hỏng đã được giữ lại tại:\n${loadError.backup}`
+          : 'File index.json bị hỏng và cũng không đổi tên để giữ lại được. ' +
+            'ClipFull bắt đầu lại từ đầu.',
+        buttons: ['Đã hiểu']
+      });
+    }
 
     // Phím tắt hỏng mà app lại không có cửa sổ -> người dùng tưởng nó chết.
     // Phải nói ra, đúng một lần, ngay lúc khởi động.
@@ -88,6 +118,8 @@ function main() {
   app.on('will-quit', () => {
     hotkey.unregisterAll();
     watcher.stop();
+    update.stop();
+    clearInterval(retentionTimer);
     store.flush(); // chưa kịp ghi thì ghi nốt, đừng để mất
   });
 }
@@ -100,32 +132,145 @@ function quit() {
 
 /* ------------------------------------------------------------------ watcher */
 
+/** Bề ngang ảnh thu nhỏ trong danh sách. */
+const THUMB_WIDTH = 160;
+
 function startWatching() {
   const settings = getSettings();
   watcher.stop();
   if (settings.paused) return;
   watcher.start({
     pollMs: settings.pollMs,
-    onText: (text) => store.addText(text)
+    captureImages: settings.captureImages,
+    captureFiles: settings.captureFiles,
+    onText: (text) => addTextGuarded(text),
+    onFiles: (paths) => store.addFiles(paths),
+    onImage: (image) => store.addImage(prepareImage(image))
   });
 }
 
+/**
+ * Cửa duy nhất mà text đi vào lịch sử — nên cũng là chỗ duy nhất cần đặt bộ lọc
+ * bí mật. store.js không phải biết gì về khái niệm "bí mật".
+ */
+function addTextGuarded(text) {
+  const { redact: rules } = getSettings();
+  if (!rules?.enabled) return store.addText(text);
+
+  const found = redact.scan(text, rules.patterns ?? undefined);
+  if (!found.length) return store.addText(text);
+
+  // 'skip' là mặc định: lưu rồi che thì nội dung gốc vẫn đã kịp nằm trên đĩa
+  // một lần. Không lưu là lựa chọn duy nhất thật sự an toàn.
+  if (rules.action !== 'mask') return null;
+
+  const item = store.addText(redact.mask(text, rules.patterns ?? undefined));
+  if (item) store.toggleMask(item.id);
+  return item;
+}
+
+/** Quét mục quá hạn mỗi giờ — app chạy nền hàng tuần liền là chuyện bình thường. */
+const RETENTION_SWEEP_MS = 60 * 60 * 1000;
+let retentionTimer = null;
+
+function startRetentionSweep() {
+  clearInterval(retentionTimer);
+  retentionTimer = setInterval(() => {
+    store.sweepExpired(getSettings().retentionDays);
+  }, RETENTION_SWEEP_MS);
+}
+
+/**
+ * Đổi NativeImage thành mấy buffer mà store cần.
+ *
+ * Phần đụng tới API ảnh của Electron gom hết vào đây, để store.js chỉ phụ thuộc
+ * `app.getPath` và vẫn test được mà không cần dựng cả runtime Electron.
+ */
+function prepareImage(image) {
+  const { width, height } = image.getSize();
+  const thumbSource = width > THUMB_WIDTH ? image.resize({ width: THUMB_WIDTH }) : image;
+  return {
+    png: image.toPNG(),
+    thumb: thumbSource.toPNG(),
+    width,
+    height
+  };
+}
+
 /* ----------------------------------------------------------------- settings */
+
+/** Đổi bất kỳ cái nào trong số này thì watcher phải dựng lại với tham số mới. */
+const RESTART_WATCHER = ['paused', 'pollMs', 'captureImages', 'captureFiles'];
 
 function applyPatch(patch) {
   const before = getSettings();
   const next = setSettings(patch);
 
   if ('maxItems' in patch) store.setMaxItems(next.maxItems);
-  if ('opacity' in patch || 'background' in patch) applyAppearance(next);
+  if ('retentionDays' in patch) store.sweepExpired(next.retentionDays);
+  if ('encryptHistory' in patch && before.encryptHistory !== next.encryptHistory) {
+    applyEncryption(next.encryptHistory);
+  }
+  // Gọi vô điều kiện: window.js giữ bản sao settings riêng để dùng lúc blur và
+  // lúc tính độ mờ. Chỉ đồng bộ khi đổi opacity/background là để nó ôm bản cũ —
+  // tắt "tự ẩn khi bấm ra ngoài" mà panel vẫn ẩn cho tới lần mở kế.
+  applyAppearance(next);
   if ('openAtLogin' in patch) applyAutoStart(next.openAtLogin);
-  if ('paused' in patch || (('pollMs' in patch) && !next.paused)) startWatching();
+  if ('checkUpdates' in patch) {
+    if (next.checkUpdates) update.start(update.repoSlug(pkg.repository), announceUpdate);
+    else update.stop();
+  }
+  if (RESTART_WATCHER.some((key) => key in patch) && (!next.paused || 'paused' in patch)) {
+    startWatching();
+  }
 
   if (before.paused !== next.paused || before.openAtLogin !== next.openAtLogin) {
     tray.refreshTray(next, hotkeyFailed);
   }
   send('settings:changed', next);
   return next;
+}
+
+/**
+ * Bật/tắt mã hoá rồi ghi lại toàn bộ dữ liệu.
+ *
+ * Máy không hỗ trợ safeStorage thì store.reseal() trả về false — phải nói ra và
+ * chỉnh lại setting cho khớp thực tế, không để giao diện hiện "đã bật" trong
+ * khi trên đĩa vẫn là chữ thường.
+ */
+function applyEncryption(enable) {
+  const applied = store.reseal(enable);
+  if (applied === enable) return;
+
+  setSettings({ encryptHistory: applied });
+  dialog.showMessageBox({
+    type: 'warning',
+    title: 'ClipFull',
+    message: 'Không mã hoá được lịch sử',
+    detail:
+      'Windows không cung cấp được khoá mã hoá cho ClipFull trên máy này, nên lịch sử ' +
+      'vẫn được lưu ở dạng chữ thường.',
+    buttons: ['Đã hiểu']
+  });
+}
+
+/**
+ * Có bản mới thì hỏi, rồi mở trang tải bằng trình duyệt.
+ *
+ * Cố ý KHÔNG tự tải: xem đầu update.js. Người dùng tự quyết định và tự thấy
+ * mình đang tải gì, từ đâu.
+ */
+async function announceUpdate({ tag, url }) {
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: 'ClipFull',
+    message: `Đã có bản ${tag}`,
+    detail: `Bạn đang dùng ${app.getVersion()}. ClipFull không tự tải bản mới — bấm "Mở trang tải" để xem và tự cài.`,
+    buttons: ['Mở trang tải', 'Để sau'],
+    defaultId: 0,
+    cancelId: 1
+  });
+  if (response === 0) update.openReleasePage(url);
 }
 
 function applyAutoStart(enabled) {
@@ -138,24 +283,84 @@ function applyAutoStart(enabled) {
 
 /* ---------------------------------------------------------------------- IPC */
 
+/** Trần cho items:copyText. Không ai copy tay 50 triệu ký tự. */
+const MAX_COPY_CHARS = 50_000_000;
+
+function toDataUrl(png) {
+  return png ? `data:image/png;base64,${png.toString('base64')}` : null;
+}
+
+/**
+ * Ghi clipboard rồi ẩn panel.
+ *
+ * markSelfWrite là chốt chặn vòng lặp — không có nó, watcher thấy clipboard vừa
+ * đổi và thêm lại chính nội dung vừa ghi, thành vòng vô tận.
+ */
+function writeClipboard(text) {
+  watcher.markSelfWrite(text);
+  clipboard.writeText(text);
+  hidePanel();
+  return { ok: true };
+}
+
 function registerIpc() {
   ipcMain.handle('items:list', () => store.list());
   ipcMain.handle('items:full', (_e, id) => store.full(id));
+  ipcMain.handle('items:search', (_e, query) => store.search(query));
   ipcMain.handle('items:pin', (_e, id) => store.togglePin(id));
+  ipcMain.handle('items:mask', (_e, id) => store.toggleMask(id));
   ipcMain.handle('items:remove', (_e, id) => store.remove(id));
   ipcMain.handle('items:clear', () => store.clear());
 
-  /**
-   * Chọn một mục: ghi vào clipboard rồi ẩn panel.
-   * markSelfWrite là chốt chặn vòng lặp — không có nó, watcher sẽ thấy clipboard
-   * vừa đổi và thêm lại chính mục vừa chọn.
-   */
+  /** Chọn một mục: ghi toàn văn vào clipboard rồi ẩn panel. */
   ipcMain.handle('items:copy', (_e, id) => {
     const text = store.full(id);
     if (!text) return { ok: false };
-    watcher.markSelfWrite(text);
-    clipboard.writeText(text);
+    store.markUsed(id);
+    return writeClipboard(text);
+  });
+
+  /**
+   * Copy một đoạn text tuỳ ý thay vì copy nguyên mục: dùng cho bản đã biến đổi
+   * (format JSON, gỡ hard-wrap…) và cho phần người dùng bôi đen.
+   *
+   * Text đến từ renderer, nhưng gốc gác của nó vốn là clipboard nên không có
+   * thêm rủi ro nào — vẫn chặn ở mức kích thước để một renderer hỏng không đẩy
+   * được vài trăm MB vào clipboard.
+   */
+  ipcMain.handle('items:copyText', (_e, text) => {
+    const value = String(text ?? '');
+    if (!value || value.length > MAX_COPY_CHARS) return { ok: false };
+    return writeClipboard(value);
+  });
+
+  /**
+   * Ảnh đi sang renderer dạng data URL.
+   *
+   * CSP của panel chỉ cho `img-src 'self' data:`, nên đây là đường duy nhất —
+   * và cũng là đường đúng: không phải mở thêm protocol tuỳ biến hay cho renderer
+   * đọc file, chỉ để hiện một tấm ảnh.
+   */
+  ipcMain.handle('items:image', (_e, id) => toDataUrl(store.imageOf(id)));
+  ipcMain.handle('items:thumb', (_e, id) => toDataUrl(store.thumbOf(id)));
+
+  /** Copy một mục ảnh: dựng lại NativeImage từ PNG trên đĩa rồi ghi clipboard. */
+  ipcMain.handle('items:copyImage', (_e, id) => {
+    const png = store.imageOf(id);
+    if (!png) return { ok: false };
+    const image = nativeImage.createFromBuffer(png);
+    if (image.isEmpty()) return { ok: false };
+    clipboard.writeImage(image);
+    store.markUsed(id);
+    watcher.markSelfImage(); // nếu không, nhịp kiểm ảnh thêm lại chính mục này
     hidePanel();
+    return { ok: true };
+  });
+
+  /** Mở Explorer và trỏ vào đúng file — dùng cho mục đường dẫn file. */
+  ipcMain.handle('shell:reveal', (_e, path) => {
+    if (typeof path !== 'string' || !path) return { ok: false };
+    shell.showItemInFolder(path);
     return { ok: true };
   });
 
@@ -177,11 +382,71 @@ function registerIpc() {
   ipcMain.handle('hotkey:active', () => hotkey.activeHotkeys());
 
   ipcMain.handle('clipboard:diagnose', () => watcher.diagnose());
+  ipcMain.handle('redact:patterns', () => ({
+    all: redact.ALL_PATTERNS,
+    defaults: redact.DEFAULT_PATTERN_IDS,
+    encryptionAvailable: crypt.isAvailable()
+  }));
 
   ipcMain.handle('panel:hide', () => hidePanel());
+  ipcMain.handle('panel:hover', (_e, on) => setHover(on));
   ipcMain.handle('panel:settings-open', (_e, open) => setSettingsOpen(open));
   ipcMain.handle('app:quit', () => quit());
   ipcMain.handle('app:paths', () => ({ userData: app.getPath('userData') }));
+  ipcMain.handle('history:export', () => exportHistory());
+  ipcMain.handle('history:import', () => importHistory());
+}
+
+/* --------------------------------------------------------- export / import */
+
+async function exportHistory() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Xuất lịch sử ClipFull',
+    defaultPath: `clipfull-${stamp}.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  // Cảnh báo TRƯỚC khi ghi, không phải sau: file này nằm ngoài tầm của DPAPI,
+  // và nó chứa đúng những thứ người dùng vừa bật mã hoá để bảo vệ.
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'ClipFull',
+    message: 'File xuất ra KHÔNG được mã hoá',
+    detail:
+      'Toàn bộ lịch sử — kể cả mục đã đánh dấu nhạy cảm — sẽ nằm ở dạng chữ thường ' +
+      'trong file này. Hãy cất nó ở nơi bạn tin tưởng.',
+    buttons: ['Xuất', 'Huỷ'],
+    defaultId: 1,
+    cancelId: 1
+  });
+  if (response !== 0) return { ok: false, canceled: true };
+
+  try {
+    writeFileSync(filePath, JSON.stringify(store.exportAll(), null, 2), 'utf8');
+    return { ok: true, path: filePath };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error) };
+  }
+}
+
+async function importHistory() {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Nhập lịch sử ClipFull',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (canceled || !filePaths?.length) return { ok: false, canceled: true };
+
+  try {
+    const data = JSON.parse(readFileSync(filePaths[0], 'utf8'));
+    const result = store.importAll(data);
+    store.flush();
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error) };
+  }
 }
 
 app.on('activate', () => {

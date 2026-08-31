@@ -21,8 +21,14 @@ contextBridge.exposeInMainWorld('clipfull', {
   items: {
     list: () => invoke('items:list'),
     full: (id) => invoke('items:full', id),
+    search: (query) => invoke('items:search', query),
     copy: (id) => invoke('items:copy', id),
+    copyText: (text) => invoke('items:copyText', text),
+    copyImage: (id) => invoke('items:copyImage', id),
+    image: (id) => invoke('items:image', id),
+    thumb: (id) => invoke('items:thumb', id),
     pin: (id) => invoke('items:pin', id),
+    mask: (id) => invoke('items:mask', id),
     remove: (id) => invoke('items:remove', id),
     clear: () => invoke('items:clear')
   },
@@ -36,12 +42,21 @@ contextBridge.exposeInMainWorld('clipfull', {
   },
   panel: {
     hide: () => invoke('panel:hide'),
+    hover: (on) => invoke('panel:hover', on),
     settingsOpen: (open) => invoke('panel:settings-open', open)
+  },
+  shell: {
+    reveal: (path) => invoke('shell:reveal', path)
+  },
+  history: {
+    export: () => invoke('history:export'),
+    import: () => invoke('history:import')
   },
   app: {
     quit: () => invoke('app:quit'),
     paths: () => invoke('app:paths'),
-    diagnose: () => invoke('clipboard:diagnose')
+    diagnose: () => invoke('clipboard:diagnose'),
+    redactPatterns: () => invoke('redact:patterns')
   },
   onItemsChanged: (fn) => on('items:changed', fn),
   onSettingsChanged: (fn) => on('settings:changed', fn),
