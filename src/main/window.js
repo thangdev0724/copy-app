@@ -13,8 +13,7 @@
 import { BrowserWindow, screen, shell } from 'electron';
 import { join } from 'node:path';
 
-// Bundle xuất ra CommonJS nên __dirname có sẵn lúc chạy.
-// eslint-disable-next-line no-undef
+// Bundle xuất ra CommonJS nên __dirname có sẵn lúc chạy (global khai báo trong eslint.config.mjs).
 const dirname = __dirname;
 
 /** Chừa mép để panel không dính sát cạnh màn hình / đè lên thanh tác vụ. */
@@ -87,6 +86,26 @@ let currentSettings = {};
 let settingsPinnedOpen = false;
 let quitting = false;
 
+/**
+ * Con trỏ có đang nằm trên panel không.
+ *
+ * Main process không tự biết được — không có sự kiện hover ở cấp cửa sổ. Renderer
+ * bắt mouseenter/mouseleave rồi báo sang qua IPC `panel:hover`.
+ */
+let hovering = false;
+
+/** Mức mờ đáng lẽ phải hiện: rê chuột vào là rõ hẳn, rời ra thì mờ lại. */
+function targetOpacity() {
+  if (hovering) return 1;
+  return Number(currentSettings.opacity) || 1;
+}
+
+export function setHover(on) {
+  hovering = Boolean(on);
+  if (!win || win.isDestroyed()) return;
+  win.setOpacity(targetOpacity());
+}
+
 /** Khi mở tab Cài đặt thì tạm ngừng auto-hide, không thì chỉnh chưa xong đã biến mất. */
 export function setSettingsOpen(open) {
   settingsPinnedOpen = Boolean(open);
@@ -99,7 +118,9 @@ export function markQuitting() {
 export function applyAppearance(settings) {
   currentSettings = settings;
   if (!win || win.isDestroyed()) return;
-  win.setOpacity(Number(settings.opacity) || 1);
+  // Qua targetOpacity() chứ không đọc thẳng settings.opacity: đổi cài đặt trong
+  // lúc con trỏ đang nằm trên panel thì không được kéo nó mờ lại giữa chừng.
+  win.setOpacity(targetOpacity());
 
   // Nền acrylic/mica là hiệu ứng gốc của Windows 11 — rẻ và đẹp hơn tự làm blur.
   // Máy cũ hơn thì lặng lẽ bỏ qua, không phải lỗi.
@@ -149,7 +170,12 @@ export function showPanel(settings) {
 }
 
 export function hidePanel() {
-  if (win && !win.isDestroyed()) win.hide();
+  if (!win || win.isDestroyed()) return;
+  // Ẩn đi thì renderer không còn cơ hội bắn mouseleave — tự gỡ cờ, không thì
+  // lần mở sau panel hiện ra ở mức rõ 100% dù con trỏ đang ở tận đâu.
+  hovering = false;
+  win.setOpacity(targetOpacity());
+  win.hide();
 }
 
 export function togglePanel(settings) {

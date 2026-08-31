@@ -1,0 +1,5 @@
+# Ghi rõ ra thay vì phụ thuộc core.autocrlf của từng máy: repo lưu LF, còn
+# working tree trên Windows vẫn là CRLF như bình thường.
+* text=auto
+*.png binary
+*.ico binary

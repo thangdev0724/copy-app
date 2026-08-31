@@ -1,8 +1,8 @@
 {
   "name": "clipfull",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Lịch sử clipboard cho Windows — xem trọn nội dung từng mục, không cắt ngắn.",
+  "description": "Lịch sử clipboard cho Windows — xem trọn nội dung từng mục, hiểu được nó là gì, không cắt ngắn.",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -10,15 +10,26 @@
     "start": "electron-vite preview",
     "icons": "node scripts/make-icons.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --win nsis"
+    "dist": "npm run build && electron-builder --win nsis",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@sveltejs/vite-plugin-svelte": "^3.1.2",
     "electron": "^32.2.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-svelte": "^3.23.0",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "prettier-plugin-svelte": "^3.5.2",
     "svelte": "^4.2.19",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^4.1.11"
   },
   "build": {
     "appId": "vn.local.clipfull",
@@ -27,9 +38,15 @@
       "output": "release",
       "buildResources": "build"
     },
-    "files": ["out/**/*", "build/tray*.png", "package.json"],
+    "files": [
+      "out/**/*",
+      "build/tray*.png",
+      "package.json"
+    ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {

@@ -10,8 +10,7 @@ import { Tray, Menu, nativeImage } from 'electron';
 import { join } from 'node:path';
 import { pretty } from './hotkey.js';
 
-// Bundle xuất ra CommonJS nên __dirname có sẵn lúc chạy.
-// eslint-disable-next-line no-undef
+// Bundle xuất ra CommonJS nên __dirname có sẵn lúc chạy (global khai báo trong eslint.config.mjs).
 const dirname = __dirname;
 
 let tray = null;
