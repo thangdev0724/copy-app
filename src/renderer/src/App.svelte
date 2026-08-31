@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Settings from './lib/Settings.svelte';
+  import Highlighted from './lib/Highlighted.svelte';
 
   const api = window.clipfull;
 
@@ -23,17 +24,64 @@
   const RENDER_LIMIT = 200_000;
   let showAll = false;
 
-  $: filtered = filterItems(items, query);
+  /**
+   * Kết quả tìm TOÀN VĂN từ main process: { id: {count, firstIndex} }.
+   * null nghĩa là chưa tìm gì; {} nghĩa là đã tìm và không mục nào khớp.
+   */
+  let searchHits = null;
+  let searchTimer;
+  let matchIndex = 0;
+
+  const SEARCH_DEBOUNCE = 150;
+
+  $: filtered = filterItems(items, query, searchHits);
   $: pinned = filtered.filter((i) => i.pinned);
   $: rest = filtered.filter((i) => !i.pinned);
   $: selected = items.find((i) => i.id === selectedId) || null;
   $: tooLong = fullText.length > RENDER_LIMIT;
   $: shownText = tooLong && !showAll ? fullText.slice(0, RENDER_LIMIT) : fullText;
 
-  function filterItems(list, q) {
+  // Mục đang chọn có khớp, nhưng chỗ khớp nằm ngoài phần đang render.
+  $: hiddenMatch =
+    tooLong && !showAll && selectedId && (searchHits?.[selectedId]?.firstIndex ?? -1) >= RENDER_LIMIT;
+
+  $: scheduleSearch(query);
+
+  /**
+   * Hai tầng lọc. Preview khớp ngay tại renderer để gõ không thấy khựng; kết quả
+   * toàn văn từ main tới sau vài trăm ms rồi trộn thêm vào. Không làm thế thì
+   * mỗi ký tự gõ ra phải chờ một vòng IPC.
+   */
+  function filterItems(list, q, hits) {
     const needle = q.trim().toLowerCase();
     if (!needle) return list;
-    return list.filter((i) => i.preview.toLowerCase().includes(needle));
+    return list.filter((i) => hits?.[i.id] || i.preview.toLowerCase().includes(needle));
+  }
+
+  function scheduleSearch(q) {
+    clearTimeout(searchTimer);
+    const needle = q.trim();
+    if (!needle) {
+      searchHits = null;
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      const hits = await api.items.search(needle);
+      // Gõ tiếp trong lúc chờ thì kết quả này đã lỗi thời — vứt đi, đừng để nó
+      // ghi đè lên kết quả của chuỗi mới hơn.
+      if (needle === query.trim()) {
+        searchHits = hits;
+        matchIndex = 0;
+      }
+    }, SEARCH_DEBOUNCE);
+  }
+
+  /** Nhảy giữa các vệt tô trong pane nội dung. */
+  function jumpMatch(delta) {
+    const marks = document.querySelectorAll('.content mark');
+    if (!marks.length) return;
+    matchIndex = (matchIndex + delta + marks.length) % marks.length;
+    marks[matchIndex]?.scrollIntoView({ block: 'center' });
   }
 
   async function refresh() {
@@ -46,6 +94,7 @@
     selectedId = id;
     showAll = false;
     fullText = '';
+    matchIndex = 0;
     if (!id) return;
     loadingFull = true;
     fullText = await api.items.full(id);
@@ -86,6 +135,18 @@
       api.panel.hide();
       return;
     }
+    // Ctrl+F là phản xạ có sẵn của mọi người khi muốn tìm — ô tìm kiếm đã nằm
+    // sẵn trên đầu, chỉ cần đưa con trỏ vào đó.
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      document.querySelector('.search')?.focus();
+      return;
+    }
+    if (e.key === 'F3') {
+      e.preventDefault();
+      jumpMatch(e.shiftKey ? -1 : 1);
+      return;
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       move(1);
@@ -95,10 +156,16 @@
     } else if (e.key === 'Enter') {
       e.preventDefault();
       copySelected();
-    } else if (e.key === 'Delete' && selectedId) {
+    } else if (e.key === 'Delete' && selectedId && !isTyping(e.target)) {
+      // Không chặn thì đang sửa chuỗi tìm kiếm mà bấm Delete là xoá luôn mục
+      // đang chọn — mất dữ liệu vì một phím hoàn toàn vô hại.
       e.preventDefault();
       await api.items.remove(selectedId);
     }
+  }
+
+  function isTyping(target) {
+    return target instanceof HTMLElement && /^(INPUT|TEXTAREA)$/.test(target.tagName);
   }
 
   function openSettings() {
@@ -215,6 +282,9 @@
               <span class="line">{firstLine(item.preview)}</span>
               <span class="meta">
                 {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
+                {#if searchHits?.[item.id]}
+                  · <span class="hits">{searchHits[item.id].count} khớp</span>
+                {/if}
               </span>
             </button>
           {/each}
@@ -236,9 +306,16 @@
             {#if loadingFull}
               <p class="empty">Đang đọc…</p>
             {:else}
-              <pre class="content" class:mono={settings.monospaceDetail}>{shownText}</pre>
+              <pre class="content" class:mono={settings.monospaceDetail}><Highlighted
+                  text={shownText}
+                  {query}
+                  current={matchIndex}
+                /></pre>
               {#if tooLong && !showAll}
                 <div class="more">
+                  {#if hiddenMatch}
+                    <b>Chỗ khớp nằm ngoài phần đang hiện.</b>
+                  {/if}
                   Đang hiện {RENDER_LIMIT.toLocaleString('vi-VN')} / {fullText.length.toLocaleString('vi-VN')}
                   ký tự đầu.
                   <button on:click={() => (showAll = true)}>Hiện tất cả</button>
@@ -252,7 +329,7 @@
       </div>
 
       <footer class="bar foot">
-        <span>↑↓ chọn · Enter copy · Del xoá · Esc đóng</span>
+        <span>↑↓ chọn · Enter copy · Ctrl+F tìm · F3 khớp kế · Del xoá · Esc đóng</span>
         <span class="grow"></span>
         {#if settings.paused}<span class="paused">Đang tạm dừng</span>{/if}
         <button class="link" on:click={() => api.items.clear()}>Xoá tất cả (giữ mục ghim)</button>
@@ -413,6 +490,10 @@
   }
   .compact .meta {
     display: none;
+  }
+  .hits {
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .detail {

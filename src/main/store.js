@@ -22,6 +22,7 @@ import {
   unlinkSync
 } from 'node:fs';
 import { join } from 'node:path';
+import { BLOB_MIN_QUERY, cached, countIn } from './search.js';
 
 /** Trên ngưỡng này thì text ra file riêng thay vì nằm trong index. */
 const INLINE_LIMIT = 64 * 1024;
@@ -170,6 +171,54 @@ export function full(id) {
 
 export function hashOf(text) {
   return createHash('sha1').update(text).digest('hex');
+}
+
+/**
+ * Tìm trên TOÀN VĂN, không phải trên preview.
+ *
+ * Đây là việc của main process chứ không phải renderer: list() cố tình không gửi
+ * `inline` sang renderer, còn mục dài thì toàn văn nằm trên đĩa. Renderer lọc
+ * theo preview để gõ không thấy khựng, kết quả đầy đủ trộn vào sau.
+ *
+ * Trả null nghĩa là "không có gì để lọc", khác hẳn với {} nghĩa là "đã tìm và
+ * không mục nào khớp".
+ */
+export function search(query) {
+  const needle = String(query ?? '')
+    .trim()
+    .toLowerCase();
+  if (!needle) return null;
+
+  const hits = {};
+  for (const item of items) {
+    const info = matchItem(item, needle);
+    if (info) hits[item.id] = info;
+  }
+  return hits;
+}
+
+function matchItem(item, needle) {
+  // Mục ngắn: toàn văn nằm sẵn trong index, khớp là chính xác tuyệt đối.
+  if (typeof item.inline === 'string') {
+    return countIn(cached(item.hash, () => item.inline), needle);
+  }
+
+  if (needle.length >= BLOB_MIN_QUERY) {
+    const text = cached(item.hash, () => readBlob(item.hash));
+    if (text !== null) return countIn(text, needle);
+  }
+
+  // Chuỗi tìm quá ngắn để đáng mở file, hoặc blob đọc hỏng. Preview vẫn hơn
+  // không có gì — chỉ là số lần khớp sẽ thiếu.
+  return countIn((item.preview || '').toLowerCase(), needle);
+}
+
+function readBlob(hash) {
+  try {
+    return readFileSync(blobFile(hash), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------- ghi */

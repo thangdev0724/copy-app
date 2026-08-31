@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('clipfull', {
   items: {
     list: () => invoke('items:list'),
     full: (id) => invoke('items:full', id),
+    search: (query) => invoke('items:search', query),
     copy: (id) => invoke('items:copy', id),
     pin: (id) => invoke('items:pin', id),
     remove: (id) => invoke('items:remove', id),

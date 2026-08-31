@@ -162,6 +162,7 @@ function applyAutoStart(enabled) {
 function registerIpc() {
   ipcMain.handle('items:list', () => store.list());
   ipcMain.handle('items:full', (_e, id) => store.full(id));
+  ipcMain.handle('items:search', (_e, query) => store.search(query));
   ipcMain.handle('items:pin', (_e, id) => store.togglePin(id));
   ipcMain.handle('items:remove', (_e, id) => store.remove(id));
   ipcMain.handle('items:clear', () => store.clear());
