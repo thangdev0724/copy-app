@@ -56,7 +56,8 @@ contextBridge.exposeInMainWorld('clipfull', {
     quit: () => invoke('app:quit'),
     paths: () => invoke('app:paths'),
     diagnose: () => invoke('clipboard:diagnose'),
-    redactPatterns: () => invoke('redact:patterns')
+    redactPatterns: () => invoke('redact:patterns'),
+    autoPasteSupported: () => invoke('autopaste:supported')
   },
   onItemsChanged: (fn) => on('items:changed', fn),
   onSettingsChanged: (fn) => on('settings:changed', fn),

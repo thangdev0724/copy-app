@@ -16,6 +16,7 @@ import * as tray from './tray.js';
 import * as redact from './redact.js';
 import * as crypt from './crypt.js';
 import * as update from './update.js';
+import * as autopaste from './autopaste.js';
 import pkg from '../../package.json';
 import {
   createWindow,
@@ -300,7 +301,18 @@ function writeClipboard(text) {
   watcher.markSelfWrite(text);
   clipboard.writeText(text);
   hidePanel();
+  tryAutoPaste();
   return { ok: true };
+}
+
+/**
+ * Gọi SAU hidePanel(): phải để Windows trả foreground về cửa sổ trước đó thì
+ * phím mới gửi đúng chỗ. Xem phần cảnh báo ở đầu autopaste.js.
+ */
+function tryAutoPaste() {
+  const settings = getSettings();
+  if (!settings.autoPaste) return;
+  autopaste.paste({ delayMs: settings.autoPasteDelayMs });
 }
 
 function registerIpc() {
@@ -354,6 +366,7 @@ function registerIpc() {
     store.markUsed(id);
     watcher.markSelfImage(); // nếu không, nhịp kiểm ảnh thêm lại chính mục này
     hidePanel();
+    tryAutoPaste();
     return { ok: true };
   });
 
@@ -382,6 +395,7 @@ function registerIpc() {
   ipcMain.handle('hotkey:active', () => hotkey.activeHotkeys());
 
   ipcMain.handle('clipboard:diagnose', () => watcher.diagnose());
+  ipcMain.handle('autopaste:supported', () => autopaste.isSupported());
   ipcMain.handle('redact:patterns', () => ({
     all: redact.ALL_PATTERNS,
     defaults: redact.DEFAULT_PATTERN_IDS,

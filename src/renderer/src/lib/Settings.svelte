@@ -11,6 +11,9 @@
   let paths = null;
   let redact = null;
   let transferNote = '';
+  let autoPasteSupported = false;
+
+  api.app.autoPasteSupported().then((yes) => (autoPasteSupported = yes));
 
   loadRedact();
 
@@ -275,6 +278,41 @@
         Hợp khi cần điền một loạt ô: copy 3 thứ, rồi dán lần lượt 1 → 2 → 3 mà không phải
         bấm mũi tên lại từ đầu mỗi lần.
       </p>
+
+      {#if autoPasteSupported}
+        <label class="sw">
+          <input
+            type="checkbox"
+            checked={settings.autoPaste}
+            on:change={(e) => onPatch({ autoPaste: e.target.checked })}
+          />
+          <span>Tự động dán sau khi chọn (<b>thí nghiệm</b>)</span>
+        </label>
+        <p class="hint tight">
+          Chọn xong thì ClipFull nhờ PowerShell gửi <b>Ctrl + V</b> tới cửa sổ bạn vừa rời khỏi.
+          <b>Chưa được kiểm chứng đầy đủ</b>: tiến trình PowerShell có thể chớp lấy focus, phần
+          mềm diệt virus có thể chặn, và gần như chắc chắn không gửi được vào ứng dụng chạy
+          quyền admin (Windows chặn tiến trình quyền thấp gửi phím cho cửa sổ quyền cao). Thấy
+          dán nhầm chỗ thì tắt đi.
+        </p>
+
+        {#if settings.autoPaste}
+          <label for="apdelay">Chờ trước khi gửi phím — {settings.autoPasteDelayMs}ms</label>
+          <input
+            id="apdelay"
+            type="range"
+            min="0"
+            max="500"
+            step="10"
+            value={settings.autoPasteDelayMs}
+            on:change={(e) => onPatch({ autoPasteDelayMs: Number(e.target.value) })}
+          />
+          <p class="hint tight">
+            Quá ngắn thì phím gửi đi trước khi Windows kịp trả focus về cửa sổ cũ. Dán nhầm vào
+            chỗ khác thì tăng số này lên.
+          </p>
+        {/if}
+      {/if}
 
       <label for="poll">Nhịp kiểm tra clipboard — {settings.pollMs}ms</label>
       <input

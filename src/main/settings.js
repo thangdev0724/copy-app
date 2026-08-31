@@ -39,6 +39,10 @@ export const DEFAULTS = {
 
   // Copy xong thì lần mở panel kế tự nhảy sang mục dưới — dán liên tiếp 1→2→3.
   pasteStack: false,
+
+  // THÍ NGHIỆM, mặc định tắt. Xem đầu src/main/autopaste.js.
+  autoPaste: false,
+  autoPasteDelayMs: 90,
   pollMs: 300,
 
   // Ảnh mặc định TẮT: nhận diện ảnh đổi buộc phải giải mã bitmap, nên ai không
@@ -106,6 +110,7 @@ export function setSettings(patch) {
   // 0 ở đây KHÔNG phải giá trị hỏng — nó có nghĩa là "không giới hạn".
   next.maxItems = Math.round(clamp(next.maxItems, 0, Number.MAX_SAFE_INTEGER, 0));
   next.retentionDays = Math.round(clamp(next.retentionDays, 0, 3650, 0));
+  next.autoPasteDelayMs = Math.round(clamp(next.autoPasteDelayMs, 0, 2000, 90));
 
   // Ô nhập kích thước cho gõ tay, mà gõ 20 vào ô "Rộng" thì panel biến mất khỏi
   // tầm với — Electron tự chặn ở minWidth nhưng settings.json vẫn giữ số bậy.
