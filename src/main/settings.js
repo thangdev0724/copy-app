@@ -59,6 +59,9 @@ export const DEFAULTS = {
   // nhưng che). Mặc định skip — lưu rồi che vẫn là đã ghi nó xuống đĩa một lần.
   redact: { enabled: true, action: 'skip', patterns: null },
 
+  // Kiểm tra bản mới lúc khởi động và mỗi 24h. Chỉ báo, không tự tải.
+  checkUpdates: true,
+
   // Đã hiện mẹo "đã copy, bấm Ctrl+V" lần nào chưa.
   seenPasteHint: false
 };

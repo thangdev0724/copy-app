@@ -15,6 +15,8 @@ import * as hotkey from './hotkey.js';
 import * as tray from './tray.js';
 import * as redact from './redact.js';
 import * as crypt from './crypt.js';
+import * as update from './update.js';
+import pkg from '../../package.json';
 import {
   createWindow,
   showPanel,
@@ -80,6 +82,7 @@ function main() {
 
     applyAutoStart(settings.openAtLogin);
     startWatching();
+    if (settings.checkUpdates) update.start(update.repoSlug(pkg.repository), announceUpdate);
 
     // Lịch sử vừa mất mà không nói gì thì người dùng tưởng app tự xoá sạch.
     // Bản hỏng vẫn còn trên đĩa, phải chỉ cho họ biết nó nằm ở đâu.
@@ -115,6 +118,7 @@ function main() {
   app.on('will-quit', () => {
     hotkey.unregisterAll();
     watcher.stop();
+    update.stop();
     clearInterval(retentionTimer);
     store.flush(); // chưa kịp ghi thì ghi nốt, đừng để mất
   });
@@ -212,6 +216,10 @@ function applyPatch(patch) {
   // tắt "tự ẩn khi bấm ra ngoài" mà panel vẫn ẩn cho tới lần mở kế.
   applyAppearance(next);
   if ('openAtLogin' in patch) applyAutoStart(next.openAtLogin);
+  if ('checkUpdates' in patch) {
+    if (next.checkUpdates) update.start(update.repoSlug(pkg.repository), announceUpdate);
+    else update.stop();
+  }
   if (RESTART_WATCHER.some((key) => key in patch) && (!next.paused || 'paused' in patch)) {
     startWatching();
   }
@@ -244,6 +252,25 @@ function applyEncryption(enable) {
       'vẫn được lưu ở dạng chữ thường.',
     buttons: ['Đã hiểu']
   });
+}
+
+/**
+ * Có bản mới thì hỏi, rồi mở trang tải bằng trình duyệt.
+ *
+ * Cố ý KHÔNG tự tải: xem đầu update.js. Người dùng tự quyết định và tự thấy
+ * mình đang tải gì, từ đâu.
+ */
+async function announceUpdate({ tag, url }) {
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: 'ClipFull',
+    message: `Đã có bản ${tag}`,
+    detail: `Bạn đang dùng ${app.getVersion()}. ClipFull không tự tải bản mới — bấm "Mở trang tải" để xem và tự cài.`,
+    buttons: ['Mở trang tải', 'Để sau'],
+    defaultId: 0,
+    cancelId: 1
+  });
+  if (response === 0) update.openReleasePage(url);
 }
 
 function applyAutoStart(enabled) {

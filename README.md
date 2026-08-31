@@ -45,6 +45,24 @@ npm run dist      # tạo installer NSIS trong release/
 Installer không ký số, nên lần đầu chạy Windows SmartScreen sẽ cảnh báo
 "Windows protected your PC" → **More info** → **Run anyway**. Chỉ một lần.
 
+### Kiểm tra bản mới
+
+ClipFull hỏi GitHub xem có bản mới không, lúc khởi động và mỗi 24 giờ — **chỉ
+báo, không tự tải, không tự cài**. Có bản mới thì nó hiện hộp thoại và mở trang
+tải bằng trình duyệt để bạn tự thấy mình đang tải gì, từ đâu.
+
+Muốn bật thì thêm `repository` vào `package.json`:
+
+```json
+"repository": { "type": "git", "url": "https://github.com/<bạn>/clipfull" }
+```
+
+Chưa có thì tính năng này lặng lẽ không làm gì.
+
+Cố ý không làm auto-update thật: tự viết phần tải + xác minh chữ ký + tráo
+installer là đúng chỗ dễ tạo lỗ hổng thực thi mã nhất trong cả app. Nếu thật sự
+cần thì đó là lúc cân nhắc `electron-updater`, chứ không phải lúc tự viết lấy.
+
 ## Phím
 
 | Phím | Việc |
@@ -146,6 +164,7 @@ src/main/
   search.js    đếm khớp toàn văn + cache LRU theo hash nội dung
   redact.js    nhận diện bí mật theo mẫu (Luhn cho số thẻ)
   crypt.js     mã hoá đĩa bằng safeStorage/DPAPI
+  update.js    hỏi GitHub xem có bản mới không (chỉ báo)
 src/preload/   cầu IPC (contextIsolation bật)
 src/renderer/src/
   App.svelte           master/detail, phím tắt, ghép các mảnh
@@ -209,9 +228,27 @@ nhịp ~1,2 giây và chỉ chạy khi người dùng bật thì ai không cần
 data:`, nên không phải mở protocol tuỳ biến hay cho renderer đọc file chỉ để hiện
 một tấm ảnh.
 
+## Không có runtime dependency
+
+`package.json` không có mục `dependencies`, và đó là chủ ý. `scripts/make-icons.mjs`
+tự tay encode PNG/ICO; tô màu cú pháp, so sánh diff, nhận diện nội dung đều viết
+tay. Bundle nhỏ, khởi động nhanh, không có chuỗi cung ứng nào để lo.
+
+Chỉ có `devDependencies` cho test và lint — chúng không đi vào bản đóng gói.
+
+## Kiểm thử
+
+194 test cho phần logic thuần: store (dedupe, vòng đời blob, index hỏng), tìm
+kiếm, nhận diện nội dung, tô màu, biến đổi, diff, mã hoá, nhận diện bí mật,
+CF_HDROP, xuất/nhập, so phiên bản.
+
+`electron` được thay bằng stub trong `test/stubs/electron.js`, nên không cần
+binary Electron để chạy `npm test`.
+
 ## Hướng đi tiếp
 
 - **Tự động dán** vào ứng dụng đang dùng: nhớ cửa sổ foreground → trả focus →
-  gửi `Ctrl+V`. Cần native module (nut.js hoặc addon N-API). Đây là thứ tách app
-  này khỏi cảm giác "còn thiếu một bước".
+  gửi `Ctrl+V`. Đây là thứ tách app này khỏi cảm giác "còn thiếu một bước".
+  Đang thử nghiệm trên nhánh `experiment/auto-paste`.
 - Native clipboard listener thay polling, nếu thấy sót lần copy.
+- Ký số installer, để bỏ hẳn màn hình cảnh báo SmartScreen.

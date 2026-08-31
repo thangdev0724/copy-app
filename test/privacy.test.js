@@ -29,7 +29,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   store.flush();
-  rmSync(tmp, { recursive: true, force: true });
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe('mã hoá lịch sử', () => {

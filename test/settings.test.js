@@ -19,7 +19,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  rmSync(tmp, { recursive: true, force: true });
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe('setSettings — chặn giá trị vô lý', () => {
