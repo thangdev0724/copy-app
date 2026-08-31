@@ -8,6 +8,7 @@ dung** thay vì một dòng bị cắt cụt bằng dấu ba chấm.
   JWT decode kèm hạn dùng, code tô màu 8 ngôn ngữ
 - **Biến đổi nhanh trước khi copy**: format JSON, gỡ hard-wrap, decode base64/URL,
   xoá mã màu ANSI — bản gốc trong lịch sử không đổi
+- **So sánh hai mục** cạnh nhau (`Ctrl + D`), gập được phần giống nhau
 - **Tìm kiếm toàn văn** (không chỉ trong phần preview), ghim mục, xoá từng mục
 - Phím tắt tự đặt (mặc định `Ctrl + Alt + V`)
 - Tuỳ chỉnh giao diện: sáng/tối, màu nhấn, cỡ chữ, mật độ, **độ mờ**, nền acrylic/mica
@@ -50,6 +51,7 @@ Installer không ký số, nên lần đầu chạy Windows SmartScreen sẽ c�
 | `Enter` | Copy mục đang chọn rồi đóng bảng |
 | `Ctrl + F` | Nhảy vào ô tìm kiếm |
 | `F3` / `Shift + F3` | Chỗ khớp kế / trước |
+| `Ctrl + D` | Ghim mục này để so sánh, rồi chọn mục khác |
 | `Delete` | Xoá mục đang chọn |
 | `Esc` | Đóng bảng |
 
@@ -113,6 +115,7 @@ src/renderer/src/
   lib/highlight.js     tô màu cú pháp tự viết, 8 ngôn ngữ
   lib/transform.js     các phép biến đổi thuần
   lib/matches.js       cắt text thành mảnh để tô vệt tìm kiếm
+  lib/diff.js          so sánh hai mục theo dòng (Myers)
   lib/viewers/         Plain, Json, Table, Url, Jwt
 ```
 

@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import Settings from './lib/Settings.svelte';
   import DetailPane from './lib/DetailPane.svelte';
+  import DiffView from './lib/DiffView.svelte';
   import { TRANSFORMS } from './lib/transform.js';
 
   const api = window.clipfull;
@@ -37,6 +38,35 @@
   let transformId = null;
   let rawView = false;
   let detailEl;
+
+  /** Mục được ghim làm vế TRÁI của phép so sánh (Ctrl+D). */
+  let compareId = null;
+  let compareText = '';
+
+  // So sánh chỉ có nghĩa khi đã chọn đủ hai mục khác nhau.
+  $: comparing = Boolean(compareId && selectedId && compareId !== selectedId);
+  $: compareItem = compareId ? items.find((i) => i.id === compareId) : null;
+
+  /**
+   * Ctrl+D: lần đầu ghim mục đang chọn làm vế trái, lần sau huỷ.
+   * Vế phải chính là mục đang chọn, nên chỉ cần bấm ↑↓ là so với mục khác.
+   */
+  async function toggleCompare() {
+    if (compareId) {
+      compareId = null;
+      compareText = '';
+      return;
+    }
+    if (!selectedId) return;
+    compareId = selectedId;
+    compareText = await api.items.full(compareId);
+    flash('Đã ghim mục này — chọn mục khác để so sánh');
+  }
+
+  function label(item) {
+    if (!item) return '';
+    return firstLine(item.preview) || `${item.chars} ký tự`;
+  }
 
   const SEARCH_DEBOUNCE = 150;
 
@@ -185,7 +215,18 @@
       return;
     }
     if (e.key === 'Escape') {
+      // Đang so sánh thì Esc thoát so sánh trước, chứ không đóng luôn cả panel.
+      if (compareId) {
+        compareId = null;
+        compareText = '';
+        return;
+      }
       api.panel.hide();
+      return;
+    }
+    if (e.key === 'd' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleCompare();
       return;
     }
     // Ctrl+F là phản xạ có sẵn của mọi người khi muốn tìm — ô tìm kiếm đã nằm
@@ -316,7 +357,10 @@
                 on:click={() => select(item.id)}
                 on:dblclick={copySelected}
               >
-                <span class="line">{firstLine(item.preview)}</span>
+                <span class="line">
+                {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
+                  >{/if}{firstLine(item.preview)}
+              </span>
                 <span class="meta">📌 {item.chars} ký tự · {when(item.ts)}</span>
               </button>
             {/each}
@@ -332,7 +376,10 @@
               on:click={() => select(item.id)}
               on:dblclick={copySelected}
             >
-              <span class="line">{firstLine(item.preview)}</span>
+              <span class="line">
+                {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
+                  >{/if}{firstLine(item.preview)}
+              </span>
               <span class="meta">
                 {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
                 {#if searchHits?.[item.id]}
@@ -344,7 +391,18 @@
         </div>
 
         <div class="detail" bind:this={detailEl}>
-          {#if selected}
+          {#if comparing}
+            <DiffView
+              leftText={compareText}
+              rightText={fullText}
+              leftLabel={label(compareItem)}
+              rightLabel={label(selected)}
+              onClose={() => {
+                compareId = null;
+                compareText = '';
+              }}
+            />
+          {:else if selected}
             <div class="detail-bar">
               <span class="detail-meta">
                 {selected.chars} ký tự · {selected.lines} dòng · {when(selected.ts)}
@@ -384,7 +442,7 @@
       </div>
 
       <footer class="bar foot">
-        <span>↑↓ chọn · Enter copy · Ctrl+F tìm · F3 khớp kế · Del xoá · Esc đóng</span>
+        <span>↑↓ chọn · Enter copy · Ctrl+F tìm · F3 khớp kế · Ctrl+D so sánh · Del xoá · Esc đóng</span>
         <span class="grow"></span>
         {#if settings.paused}<span class="paused">Đang tạm dừng</span>{/if}
         <button class="link" on:click={() => api.items.clear()}>Xoá tất cả (giữ mục ghim)</button>
@@ -549,6 +607,10 @@
   .hits {
     color: var(--accent);
     font-weight: 600;
+  }
+  .cmp {
+    color: var(--accent);
+    margin-right: 4px;
   }
 
   .detail {
