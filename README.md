@@ -4,7 +4,11 @@ Lịch sử clipboard cho Windows. Giống `Win + V`, nhưng mỗi mục **xem �
 dung** thay vì một dòng bị cắt cụt bằng dấu ba chấm.
 
 - Bảng chia đôi: danh sách bên trái, **toàn văn** bên phải, cuộn và bôi đen được
-- Tìm kiếm, ghim mục, xoá từng mục
+- **Hiểu nội dung**: JSON gập được, CSV/TSV thành bảng, URL bóc sẵn query string,
+  JWT decode kèm hạn dùng, code tô màu 8 ngôn ngữ
+- **Biến đổi nhanh trước khi copy**: format JSON, gỡ hard-wrap, decode base64/URL,
+  xoá mã màu ANSI — bản gốc trong lịch sử không đổi
+- **Tìm kiếm toàn văn** (không chỉ trong phần preview), ghim mục, xoá từng mục
 - Phím tắt tự đặt (mặc định `Ctrl + Alt + V`)
 - Tuỳ chỉnh giao diện: sáng/tối, màu nhấn, cỡ chữ, mật độ, **độ mờ**, nền acrylic/mica
 - Chạy cùng Windows, nằm dưới khay hệ thống
@@ -44,11 +48,19 @@ Installer không ký số, nên lần đầu chạy Windows SmartScreen sẽ c�
 | `Ctrl + Alt + V` | Mở / đóng bảng (đổi được trong Cài đặt) |
 | `↑` `↓` | Chọn mục |
 | `Enter` | Copy mục đang chọn rồi đóng bảng |
+| `Ctrl + F` | Nhảy vào ô tìm kiếm |
+| `F3` / `Shift + F3` | Chỗ khớp kế / trước |
 | `Delete` | Xoá mục đang chọn |
 | `Esc` | Đóng bảng |
 
 Chọn một mục là **copy vào clipboard**, sau đó bạn tự bấm `Ctrl + V` để dán.
-v1 cố ý không tự động dán — xem *Hướng đi tiếp*.
+Bản này cố ý không tự động dán — xem *Hướng đi tiếp*.
+
+`Enter` copy cái gì thì tuỳ ngữ cảnh, xét theo thứ tự cụ thể dần:
+
+1. đang **bôi đen** trong pane nội dung → chỉ copy phần bôi đen
+2. đang bật một **phép biến đổi** → copy bản đã biến đổi (áp lên toàn văn)
+3. còn lại → copy nguyên mục
 
 ### Đừng đặt phím tắt là `Ctrl + Shift + V`
 
@@ -92,8 +104,16 @@ src/main/
   hotkey.js    đăng ký phím tắt, rollback khi hỏng
   tray.js      khay hệ thống — đường vào dự phòng
   settings.js  cấu hình
+  search.js    đếm khớp toàn văn + cache LRU theo hash nội dung
 src/preload/   cầu IPC (contextIsolation bật)
-src/renderer/  Svelte: master/detail, cài đặt, ô ghi phím tắt
+src/renderer/src/
+  App.svelte           master/detail, phím tắt, ghép các mảnh
+  lib/DetailPane.svelte chọn viewer, thanh biến đổi
+  lib/detect.js        đoán JSON / URL / JWT / bảng / code
+  lib/highlight.js     tô màu cú pháp tự viết, 8 ngôn ngữ
+  lib/transform.js     các phép biến đổi thuần
+  lib/matches.js       cắt text thành mảnh để tô vệt tìm kiếm
+  lib/viewers/         Plain, Json, Table, Url, Jwt
 ```
 
 Vài quyết định đáng giải thích:
@@ -120,6 +140,22 @@ chọn, vòng vô tận.
 
 **Tray luôn có mục "Mở bảng".** Phím tắt có thể bị ứng dụng khác chiếm; app lại
 không có cửa sổ chính. Không có đường vào dự phòng thì mất phím tắt là mất app.
+
+**Tìm kiếm chạy ở main process.** Đó là nơi có toàn văn: `list()` cố tình không
+gửi `inline` sang renderer, còn mục dài thì nằm trên đĩa. Renderer vẫn lọc theo
+preview để gõ không thấy khựng, kết quả đầy đủ trộn vào sau 150ms.
+
+**Không bao giờ dựng chuỗi HTML từ nội dung clipboard.** Tô màu cú pháp và tô vệt
+tìm kiếm đều trả về *mảng token* rồi render bằng `{#each}` để Svelte tự escape.
+Đây là dữ liệu hoàn toàn không kiểm soát được — `{@html}` ở đây là mở cửa cho nó
+chạy như mã.
+
+**Đang tìm kiếm thì tắt tô màu cú pháp.** Chồng hai lớp tô lên nhau vừa rối vừa
+làm phần đánh số vệt tô phức tạp hẳn lên, mà lúc đang tìm thì người ta cần thấy
+chỗ khớp chứ không cần thấy từ khoá.
+
+**Tự viết tô màu và nhận diện thay vì kéo Prism/Shiki về.** Dự án giữ nguyên tắc
+không có runtime dependency — `scripts/make-icons.mjs` còn tự tay encode PNG.
 
 ## Hướng đi tiếp
 

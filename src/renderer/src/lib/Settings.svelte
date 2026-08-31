@@ -116,6 +116,19 @@
         />
         <span>Dùng font monospace cho phần nội dung (hợp khi hay copy code)</span>
       </label>
+
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.showLineNumbers}
+          on:change={(e) => onPatch({ showLineNumbers: e.target.checked })}
+        />
+        <span>Hiện số dòng trong phần nội dung</span>
+      </label>
+      <p class="hint tight">
+        Nội dung trên 5.000 dòng thì tự bỏ đánh số — mỗi dòng là một hàng riêng, quá nhiều
+        thì panel mở chậm hẳn.
+      </p>
     </section>
 
     <section>

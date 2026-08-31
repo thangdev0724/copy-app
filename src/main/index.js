@@ -159,6 +159,22 @@ function applyAutoStart(enabled) {
 
 /* ---------------------------------------------------------------------- IPC */
 
+/** Trần cho items:copyText. Không ai copy tay 50 triệu ký tự. */
+const MAX_COPY_CHARS = 50_000_000;
+
+/**
+ * Ghi clipboard rồi ẩn panel.
+ *
+ * markSelfWrite là chốt chặn vòng lặp — không có nó, watcher thấy clipboard vừa
+ * đổi và thêm lại chính nội dung vừa ghi, thành vòng vô tận.
+ */
+function writeClipboard(text) {
+  watcher.markSelfWrite(text);
+  clipboard.writeText(text);
+  hidePanel();
+  return { ok: true };
+}
+
 function registerIpc() {
   ipcMain.handle('items:list', () => store.list());
   ipcMain.handle('items:full', (_e, id) => store.full(id));
@@ -167,18 +183,25 @@ function registerIpc() {
   ipcMain.handle('items:remove', (_e, id) => store.remove(id));
   ipcMain.handle('items:clear', () => store.clear());
 
-  /**
-   * Chọn một mục: ghi vào clipboard rồi ẩn panel.
-   * markSelfWrite là chốt chặn vòng lặp — không có nó, watcher sẽ thấy clipboard
-   * vừa đổi và thêm lại chính mục vừa chọn.
-   */
+  /** Chọn một mục: ghi toàn văn vào clipboard rồi ẩn panel. */
   ipcMain.handle('items:copy', (_e, id) => {
     const text = store.full(id);
     if (!text) return { ok: false };
-    watcher.markSelfWrite(text);
-    clipboard.writeText(text);
-    hidePanel();
-    return { ok: true };
+    return writeClipboard(text);
+  });
+
+  /**
+   * Copy một đoạn text tuỳ ý thay vì copy nguyên mục: dùng cho bản đã biến đổi
+   * (format JSON, gỡ hard-wrap…) và cho phần người dùng bôi đen.
+   *
+   * Text đến từ renderer, nhưng gốc gác của nó vốn là clipboard nên không có
+   * thêm rủi ro nào — vẫn chặn ở mức kích thước để một renderer hỏng không đẩy
+   * được vài trăm MB vào clipboard.
+   */
+  ipcMain.handle('items:copyText', (_e, text) => {
+    const value = String(text ?? '');
+    if (!value || value.length > MAX_COPY_CHARS) return { ok: false };
+    return writeClipboard(value);
   });
 
   ipcMain.handle('settings:get', () => getSettings());

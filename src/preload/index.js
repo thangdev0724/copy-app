@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('clipfull', {
     full: (id) => invoke('items:full', id),
     search: (query) => invoke('items:search', query),
     copy: (id) => invoke('items:copy', id),
+    copyText: (text) => invoke('items:copyText', text),
     pin: (id) => invoke('items:pin', id),
     remove: (id) => invoke('items:remove', id),
     clear: () => invoke('items:clear')

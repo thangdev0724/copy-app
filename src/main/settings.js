@@ -28,6 +28,7 @@ export const DEFAULTS = {
   fontSize: 14,
   density: 'comfortable', // 'comfortable' | 'compact'
   monospaceDetail: false,
+  showLineNumbers: false,
 
   // Hành vi
   paused: false,

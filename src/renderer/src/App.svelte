@@ -1,7 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Settings from './lib/Settings.svelte';
-  import Highlighted from './lib/Highlighted.svelte';
+  import DetailPane from './lib/DetailPane.svelte';
+  import { TRANSFORMS } from './lib/transform.js';
 
   const api = window.clipfull;
 
@@ -31,6 +32,11 @@
   let searchHits = null;
   let searchTimer;
   let matchIndex = 0;
+
+  /** Phép biến đổi đang bật trong pane chi tiết, và cờ ép về xem thô. */
+  let transformId = null;
+  let rawView = false;
+  let detailEl;
 
   const SEARCH_DEBOUNCE = 150;
 
@@ -76,12 +82,19 @@
     }, SEARCH_DEBOUNCE);
   }
 
-  /** Nhảy giữa các vệt tô trong pane nội dung. */
+  /**
+   * Nhảy giữa các vệt tô trong pane nội dung.
+   *
+   * Đọc thẳng từ DOM thay vì truyền chỉ số xuống qua các component: thứ tự các
+   * thẻ <mark> trong DOM đã đúng là thứ tự xuất hiện, nên không phải đánh số
+   * xuyên qua PlainViewer -> Highlighted rồi ghép lại cho khớp.
+   */
   function jumpMatch(delta) {
-    const marks = document.querySelectorAll('.content mark');
+    const marks = detailEl ? [...detailEl.querySelectorAll('mark')] : [];
     if (!marks.length) return;
     matchIndex = (matchIndex + delta + marks.length) % marks.length;
-    marks[matchIndex]?.scrollIntoView({ block: 'center' });
+    marks.forEach((mark, at) => mark.classList.toggle('current', at === matchIndex));
+    marks[matchIndex].scrollIntoView({ block: 'center' });
   }
 
   async function refresh() {
@@ -95,17 +108,57 @@
     showAll = false;
     fullText = '';
     matchIndex = 0;
+    // Mỗi mục là một thứ khác nhau — giữ lại "Format JSON" từ mục trước rồi áp
+    // lên một đoạn văn xuôi là vô nghĩa.
+    transformId = null;
+    rawView = false;
     if (!id) return;
     loadingFull = true;
     fullText = await api.items.full(id);
     loadingFull = false;
   }
 
+  /**
+   * Ba đường copy, xét theo thứ tự cụ thể dần:
+   *   1. có bôi đen trong pane nội dung -> chỉ copy phần bôi đen
+   *   2. có phép biến đổi đang bật     -> áp lên TOÀN VĂN rồi copy
+   *   3. còn lại                        -> main tự đọc toàn văn từ store
+   *
+   * Chỗ dễ sai: ở bước 2 phải dùng `fullText` chứ không dùng bản đang hiện —
+   * nội dung dài đã bị cắt ở RENDER_LIMIT để khỏi treo DOM, copy bản cắt là
+   * lặng lẽ đưa cho người ta một mẩu cụt.
+   */
   async function copySelected() {
     if (!selectedId) return;
-    const result = await api.items.copy(selectedId);
+
+    const picked = selectionInDetail();
+    if (picked) return finishCopy(await api.items.copyText(picked));
+
+    if (transformId) {
+      const transform = TRANSFORMS.find((t) => t.id === transformId);
+      const transformed = transform?.apply(fullText);
+      if (typeof transformed === 'string' && transformed) {
+        return finishCopy(await api.items.copyText(transformed));
+      }
+    }
+
+    finishCopy(await api.items.copy(selectedId));
+  }
+
+  /** Phần bôi đen, nhưng chỉ khi nó nằm trong pane nội dung. */
+  function selectionInDetail() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !detailEl) return '';
+    if (!detailEl.contains(selection.anchorNode) || !detailEl.contains(selection.focusNode)) {
+      return '';
+    }
+    const picked = selection.toString();
+    return picked.trim() ? picked : '';
+  }
+
+  async function finishCopy(result) {
     if (result?.ok && !settings.seenPasteHint) {
-      // Bản v1 không tự dán, nên phải nói ra một lần — không thì người dùng chọn
+      // Bản này không tự dán, nên phải nói ra một lần — không thì người dùng chọn
       // xong thấy panel biến mất mà chẳng có gì xảy ra và tưởng app hỏng.
       await api.settings.set({ seenPasteHint: true });
       flash('Đã copy — bấm Ctrl + V để dán');
@@ -290,7 +343,7 @@
           {/each}
         </div>
 
-        <div class="detail">
+        <div class="detail" bind:this={detailEl}>
           {#if selected}
             <div class="detail-bar">
               <span class="detail-meta">
@@ -306,11 +359,13 @@
             {#if loadingFull}
               <p class="empty">Đang đọc…</p>
             {:else}
-              <pre class="content" class:mono={settings.monospaceDetail}><Highlighted
-                  text={shownText}
-                  {query}
-                  current={matchIndex}
-                /></pre>
+              <DetailPane
+                text={shownText}
+                {query}
+                {settings}
+                bind:transformId
+                bind:raw={rawView}
+              />
               {#if tooLong && !showAll}
                 <div class="more">
                   {#if hiddenMatch}
@@ -515,19 +570,12 @@
     font-size: 11.5px;
     color: var(--muted);
   }
-  .content {
-    flex: 1;
-    margin: 0;
-    padding: 12px 14px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font: inherit;
-    user-select: text;
-  }
-  .content.mono {
-    font-family: ui-monospace, Consolas, 'Courier New', monospace;
-    font-size: 0.92em;
+  /* Phần cuộn và font của nội dung giờ do DetailPane tự lo. Vệt tô tìm kiếm thì
+     phải khai báo global ở đây: class .current được jumpMatch() gắn qua DOM, nên
+     component Highlighted không nhìn thấy nó lúc biên dịch. */
+  .detail :global(mark.current) {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
   .more {
     padding: 8px 14px;
