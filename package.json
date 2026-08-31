@@ -57,5 +57,9 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ClipFull"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thangdev0724/copy-app"
   }
 }
