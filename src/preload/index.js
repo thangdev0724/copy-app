@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld('clipfull', {
   shell: {
     reveal: (path) => invoke('shell:reveal', path)
   },
+  history: {
+    export: () => invoke('history:export'),
+    import: () => invoke('history:import')
+  },
   app: {
     quit: () => invoke('app:quit'),
     paths: () => invoke('app:paths'),

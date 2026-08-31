@@ -7,6 +7,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell } from 'electron';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { getSettings, setSettings } from './settings.js';
 import * as store from './store.js';
 import * as watcher from './watcher.js';
@@ -288,6 +289,7 @@ function registerIpc() {
   ipcMain.handle('items:copy', (_e, id) => {
     const text = store.full(id);
     if (!text) return { ok: false };
+    store.markUsed(id);
     return writeClipboard(text);
   });
 
@@ -322,6 +324,7 @@ function registerIpc() {
     const image = nativeImage.createFromBuffer(png);
     if (image.isEmpty()) return { ok: false };
     clipboard.writeImage(image);
+    store.markUsed(id);
     watcher.markSelfImage(); // nếu không, nhịp kiểm ảnh thêm lại chính mục này
     hidePanel();
     return { ok: true };
@@ -363,6 +366,60 @@ function registerIpc() {
   ipcMain.handle('panel:settings-open', (_e, open) => setSettingsOpen(open));
   ipcMain.handle('app:quit', () => quit());
   ipcMain.handle('app:paths', () => ({ userData: app.getPath('userData') }));
+  ipcMain.handle('history:export', () => exportHistory());
+  ipcMain.handle('history:import', () => importHistory());
+}
+
+/* --------------------------------------------------------- export / import */
+
+async function exportHistory() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Xuất lịch sử ClipFull',
+    defaultPath: `clipfull-${stamp}.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  // Cảnh báo TRƯỚC khi ghi, không phải sau: file này nằm ngoài tầm của DPAPI,
+  // và nó chứa đúng những thứ người dùng vừa bật mã hoá để bảo vệ.
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'ClipFull',
+    message: 'File xuất ra KHÔNG được mã hoá',
+    detail:
+      'Toàn bộ lịch sử — kể cả mục đã đánh dấu nhạy cảm — sẽ nằm ở dạng chữ thường ' +
+      'trong file này. Hãy cất nó ở nơi bạn tin tưởng.',
+    buttons: ['Xuất', 'Huỷ'],
+    defaultId: 1,
+    cancelId: 1
+  });
+  if (response !== 0) return { ok: false, canceled: true };
+
+  try {
+    writeFileSync(filePath, JSON.stringify(store.exportAll(), null, 2), 'utf8');
+    return { ok: true, path: filePath };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error) };
+  }
+}
+
+async function importHistory() {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Nhập lịch sử ClipFull',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (canceled || !filePaths?.length) return { ok: false, canceled: true };
+
+  try {
+    const data = JSON.parse(readFileSync(filePaths[0], 'utf8'));
+    const result = store.importAll(data);
+    store.flush();
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error) };
+  }
 }
 
 app.on('activate', () => {

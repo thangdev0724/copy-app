@@ -10,6 +10,7 @@
   let diagnosis = null;
   let paths = null;
   let redact = null;
+  let transferNote = '';
 
   loadRedact();
 
@@ -44,6 +45,20 @@
 
   async function showPaths() {
     paths = await api.app.paths();
+  }
+
+  async function exportHistory() {
+    const result = await api.history.export();
+    if (result.canceled) return;
+    transferNote = result.ok ? `Đã xuất ra ${result.path}` : `Xuất hỏng: ${result.error}`;
+  }
+
+  async function importHistory() {
+    const result = await api.history.import();
+    if (result.canceled) return;
+    transferNote = result.ok
+      ? `Đã nhập ${result.added} mục (bỏ qua ${result.skipped}).`
+      : `Nhập hỏng: ${result.error}`;
   }
 </script>
 
@@ -122,6 +137,21 @@
       >
         <option value="comfortable">Thoáng</option>
         <option value="compact">Gọn</option>
+      </select>
+
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.groupByDay}
+          on:change={(e) => onPatch({ groupByDay: e.target.checked })}
+        />
+        <span>Gom danh sách theo ngày</span>
+      </label>
+
+      <label for="sortby">Sắp xếp danh sách</label>
+      <select id="sortby" value={settings.sortBy} on:change={(e) => onPatch({ sortBy: e.target.value })}>
+        <option value="recent">Mới nhất trước</option>
+        <option value="frequent">Hay dùng nhất trước</option>
       </select>
 
       <label class="sw">
@@ -231,6 +261,19 @@
         Mặc định tắt. Nhận ra ảnh đã đổi thì bắt buộc phải giải mã bitmap — thứ đắt nhất
         trong cả vòng theo dõi — nên ảnh được kiểm bằng một nhịp riêng, chậm hơn (~1,2 giây).
         Không bật thì không tốn gì.
+      </p>
+
+      <label class="sw">
+        <input
+          type="checkbox"
+          checked={settings.pasteStack}
+          on:change={(e) => onPatch({ pasteStack: e.target.checked })}
+        />
+        <span>Dán liên tiếp: copy xong thì lần mở sau nhảy sang mục kế</span>
+      </label>
+      <p class="hint tight">
+        Hợp khi cần điền một loạt ô: copy 3 thứ, rồi dán lần lượt 1 → 2 → 3 mà không phải
+        bấm mũi tên lại từ đầu mỗi lần.
       </p>
 
       <label for="poll">Nhịp kiểm tra clipboard — {settings.pollMs}ms</label>
@@ -359,6 +402,19 @@
       {#if paths}
         <pre class="diag">{paths.userData}</pre>
       {/if}
+    </section>
+
+    <section>
+      <h3>Sao lưu</h3>
+      <div class="row">
+        <button on:click={exportHistory}>Xuất ra file</button>
+        <button on:click={importHistory}>Nhập từ file</button>
+      </div>
+      <p class="hint tight">
+        File xuất ra <b>không được mã hoá</b> — nó nằm ngoài tầm bảo vệ của DPAPI. Nhập vào
+        thì mục trùng chỉ được đẩy lên đầu, không nhân bản.
+      </p>
+      {#if transferNote}<p class="hint tight"><b>{transferNote}</b></p>{/if}
     </section>
 
     <section>

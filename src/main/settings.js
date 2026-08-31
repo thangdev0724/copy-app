@@ -27,6 +27,8 @@ export const DEFAULTS = {
   background: 'opaque', // 'opaque' | 'acrylic' | 'mica' (acrylic/mica: Windows 11)
   fontSize: 14,
   density: 'comfortable', // 'comfortable' | 'compact'
+  groupByDay: true, // gom danh sách theo ngày
+  sortBy: 'recent', // 'recent' | 'frequent'
   monospaceDetail: false,
   showLineNumbers: false,
 
@@ -34,6 +36,9 @@ export const DEFAULTS = {
   paused: false,
   openAtLogin: false,
   hideOnBlur: true,
+
+  // Copy xong thì lần mở panel kế tự nhảy sang mục dưới — dán liên tiếp 1→2→3.
+  pasteStack: false,
   pollMs: 300,
 
   // Ảnh mặc định TẮT: nhận diện ảnh đổi buộc phải giải mã bitmap, nên ai không

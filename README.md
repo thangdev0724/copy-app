@@ -12,6 +12,8 @@ dung** thay vì một dòng bị cắt cụt bằng dấu ba chấm.
 - **Tìm kiếm toàn văn** (không chỉ trong phần preview), ghim mục, xoá từng mục
 - Phím tắt tự đặt (mặc định `Ctrl + Alt + V`)
 - Tuỳ chỉnh giao diện: sáng/tối, màu nhấn, cỡ chữ, mật độ, **độ mờ**, nền acrylic/mica
+- Nhóm theo ngày, sắp theo tần suất dùng, dán liên tiếp 1→2→3
+- Xuất / nhập lịch sử ra file JSON
 - Chạy cùng Windows, nằm dưới khay hệ thống
 
 Nhận **text**, **đường dẫn file** (copy file trong Explorer), và **ảnh** —
@@ -53,6 +55,7 @@ Installer không ký số, nên lần đầu chạy Windows SmartScreen sẽ c�
 | `Ctrl + F` | Nhảy vào ô tìm kiếm |
 | `F3` / `Shift + F3` | Chỗ khớp kế / trước |
 | `Ctrl + D` | Ghim mục này để so sánh, rồi chọn mục khác |
+| `Alt + 1..9` | Copy thẳng mục thứ n |
 | `Delete` | Xoá mục đang chọn |
 | `Esc` | Đóng bảng |
 

@@ -73,9 +73,11 @@
 
   const SEARCH_DEBOUNCE = 150;
 
-  $: filtered = filterItems(items, query, searchHits);
+  $: filtered = sortItems(filterItems(items, query, searchHits), settings?.sortBy);
   $: pinned = filtered.filter((i) => i.pinned);
   $: rest = filtered.filter((i) => !i.pinned);
+  $: groups = settings?.groupByDay ? groupByDay(rest) : [{ label: null, items: rest }];
+  $: order = [...pinned, ...rest];
   $: selected = items.find((i) => i.id === selectedId) || null;
   $: tooLong = fullText.length > RENDER_LIMIT;
   $: shownText = tooLong && !showAll ? fullText.slice(0, RENDER_LIMIT) : fullText;
@@ -95,6 +97,38 @@
     const needle = q.trim().toLowerCase();
     if (!needle) return list;
     return list.filter((i) => hits?.[i.id] || i.preview.toLowerCase().includes(needle));
+  }
+
+  /**
+   * Sắp theo tần suất thì vẫn lấy thời gian làm tiêu chí phụ — hai mục cùng số
+   * lần dùng mà nhảy chỗ lung tung mỗi lần mở là không dùng được.
+   */
+  function sortItems(list, sortBy) {
+    if (sortBy !== 'frequent') return list;
+    return [...list].sort((a, b) => (b.uses ?? 0) - (a.uses ?? 0) || b.ts - a.ts);
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** Gom theo ngày, mốc tính từ nửa đêm chứ không phải "24 giờ trước". */
+  function groupByDay(list) {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const today = midnight.getTime();
+
+    const out = [];
+    for (const item of list) {
+      const label =
+        item.ts >= today
+          ? 'Hôm nay'
+          : item.ts >= today - DAY
+            ? 'Hôm qua'
+            : new Date(item.ts).toLocaleDateString('vi-VN');
+
+      if (out[out.length - 1]?.label !== label) out.push({ label, items: [] });
+      out[out.length - 1].items.push(item);
+    }
+    return out;
   }
 
   function scheduleSearch(q) {
@@ -195,7 +229,20 @@
     return picked.trim() ? picked : '';
   }
 
+  /**
+   * Paste stack: nhớ mục ngay dưới mục vừa copy, để lần mở panel kế nhảy thẳng
+   * vào đó. Dán liên tiếp 1→2→3 mà không phải bấm mũi tên lại từ đầu.
+   */
+  let stackNextId = null;
+
+  function rememberNext() {
+    if (!settings?.pasteStack) return;
+    const at = order.findIndex((i) => i.id === selectedId);
+    stackNextId = at >= 0 && at + 1 < order.length ? order[at + 1].id : null;
+  }
+
   async function finishCopy(result) {
+    if (result?.ok) rememberNext();
     if (result?.ok && !settings.seenPasteHint) {
       // Bản này không tự dán, nên phải nói ra một lần — không thì người dùng chọn
       // xong thấy panel biến mất mà chẳng có gì xảy ra và tưởng app hỏng.
@@ -210,7 +257,6 @@
   }
 
   function move(delta) {
-    const order = [...pinned, ...rest];
     if (!order.length) return;
     const at = order.findIndex((i) => i.id === selectedId);
     const next = Math.max(0, Math.min(order.length - 1, (at === -1 ? 0 : at) + delta));
@@ -248,6 +294,16 @@
     if (e.key === 'F3') {
       e.preventDefault();
       jumpMatch(e.shiftKey ? -1 : 1);
+      return;
+    }
+    // Alt+1..9: copy thẳng mục thứ n. Người dùng thuộc lòng "mục 2 là cái
+    // token" thì bỏ hẳn được bước nhìn danh sách.
+    if (e.altKey && /^[1-9]$/.test(e.key)) {
+      const target = order[Number(e.key) - 1];
+      if (target) {
+        e.preventDefault();
+        select(target.id).then(copySelected);
+      }
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -311,7 +367,11 @@
         query = '';
         showSettings = false;
         api.panel.settingsOpen(false);
-        refresh();
+        const resume = stackNextId;
+        stackNextId = null;
+        refresh().then(() => {
+          if (resume && items.some((i) => i.id === resume)) select(resume);
+        });
         document.querySelector('.search')?.focus();
       })
     ];
@@ -379,31 +439,38 @@
             {/each}
           {/if}
 
-          {#if rest.length && pinned.length}
-            <div class="group">Gần đây</div>
-          {/if}
-          {#each rest as item (item.id)}
-            <button
-              class="item"
-              class:active={item.id === selectedId}
-              on:click={() => select(item.id)}
-              on:dblclick={copySelected}
-            >
-              <span class="line">
-                {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh">◧</span
-                  >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
-                  >{:else if item.type === 'files'}<span class="kind">📁</span
-                  >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
-                    item.preview
-                  )}{/if}
-              </span>
-              <span class="meta">
-                {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
-                {#if searchHits?.[item.id]}
-                  · <span class="hits">{searchHits[item.id].count} khớp</span>
-                {/if}
-              </span>
-            </button>
+          {#each groups as group, at (group.label ?? at)}
+            {#if group.label}
+              <div class="group">{group.label}</div>
+            {:else if pinned.length}
+              <div class="group">Gần đây</div>
+            {/if}
+
+            {#each group.items as item (item.id)}
+              <button
+                class="item"
+                class:active={item.id === selectedId}
+                on:click={() => select(item.id)}
+                on:dblclick={copySelected}
+              >
+                <span class="line">
+                  {#if item.id === compareId}<span class="cmp" title="Vế trái của phép so sánh"
+                      >◧</span
+                    >{/if}{#if item.type === 'image'}<span class="kind">🖼</span
+                    >{:else if item.type === 'files'}<span class="kind">📁</span
+                    >{/if}{#if item.masked}<span class="kind">🔒</span>••••••••{:else}{firstLine(
+                      item.preview
+                    )}{/if}
+                </span>
+                <span class="meta">
+                  {item.chars} ký tự{item.lines > 1 ? ` · ${item.lines} dòng` : ''} · {when(item.ts)}
+                  {#if item.uses}· dùng {item.uses} lần{/if}
+                  {#if searchHits?.[item.id]}
+                    · <span class="hits">{searchHits[item.id].count} khớp</span>
+                  {/if}
+                </span>
+              </button>
+            {/each}
           {/each}
         </div>
 
@@ -470,7 +537,9 @@
       </div>
 
       <footer class="bar foot">
-        <span>↑↓ chọn · Enter copy · Ctrl+F tìm · F3 khớp kế · Ctrl+D so sánh · Del xoá · Esc đóng</span>
+        <span>
+          ↑↓ chọn · Enter copy · Alt+1..9 copy nhanh · Ctrl+F tìm · Ctrl+D so sánh · Esc đóng
+        </span>
         <span class="grow"></span>
         {#if settings.paused}<span class="paused">Đang tạm dừng</span>{/if}
         <button class="link" on:click={() => api.items.clear()}>Xoá tất cả (giữ mục ghim)</button>

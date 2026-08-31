@@ -219,6 +219,95 @@ export function hashOf(text) {
   return createHash('sha1').update(text).digest('hex');
 }
 
+/* --------------------------------------------------------- export / import */
+
+/** Định dạng file export. Tăng số này nếu sau đổi cấu trúc. */
+const EXPORT_VERSION = 1;
+
+/**
+ * Gói toàn bộ lịch sử thành một object ghi ra JSON được.
+ *
+ * Nội dung ra đây là CHỮ THƯỜNG, kể cả khi trên đĩa đang mã hoá — file export
+ * nằm ngoài tầm bảo vệ của DPAPI. Chỗ gọi phải cảnh báo người dùng.
+ */
+export function exportAll() {
+  return {
+    app: 'ClipFull',
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    items: items.map((item) => {
+      const base = {
+        type: item.type,
+        ts: item.ts,
+        pinned: Boolean(item.pinned),
+        masked: Boolean(item.masked),
+        uses: item.uses ?? 0
+      };
+      if (item.type === 'image') {
+        const png = imageOf(item.id);
+        return { ...base, width: item.width, height: item.height, png: png?.toString('base64') };
+      }
+      if (item.type === 'files') return { ...base, paths: item.paths };
+      return { ...base, text: full(item.id) };
+    })
+  };
+}
+
+/**
+ * Nạp từ file export. Dedupe theo hash lo phần trùng lặp, nên nhập đè lên lịch
+ * sử đang có là an toàn — mục trùng chỉ được đẩy lên đầu.
+ *
+ * @returns {{added: number, skipped: number}}
+ */
+export function importAll(data) {
+  if (!data || data.app !== 'ClipFull' || !Array.isArray(data.items)) {
+    throw new Error('Không phải file export của ClipFull.');
+  }
+
+  let added = 0;
+  let skipped = 0;
+
+  // Nhập từ cuối lên đầu: addText() luôn chèn lên đầu, nên đi ngược mới giữ
+  // đúng thứ tự thời gian của file gốc.
+  for (const entry of [...data.items].reverse()) {
+    const item = importOne(entry);
+    if (item) added++;
+    else skipped++;
+  }
+  return { added, skipped };
+}
+
+/** Tám byte mở đầu mà mọi file PNG hợp lệ đều có. */
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function importOne(entry) {
+  try {
+    if (entry.type === 'image' && entry.png) {
+      // Buffer.from(x, 'base64') KHÔNG ném lỗi với chuỗi rác — nó lặng lẽ giải
+      // ra một mớ byte vô nghĩa. File nhập vào là dữ liệu ngoài tầm kiểm soát,
+      // nên phải tự kiểm: không đúng chữ ký PNG thì đây không phải ảnh.
+      const png = Buffer.from(entry.png, 'base64');
+      if (!png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) return null;
+      return restore(addImage({ png, thumb: png, width: entry.width, height: entry.height }), entry);
+    }
+    if (entry.type === 'files') return restore(addFiles(entry.paths), entry);
+    if (typeof entry.text === 'string') return restore(addText(entry.text), entry);
+  } catch {
+    /* một mục hỏng không được làm hỏng cả lần nhập */
+  }
+  return null;
+}
+
+/** Trả lại mấy trường không suy ra được từ nội dung. */
+function restore(item, entry) {
+  if (!item) return null;
+  if (Number.isFinite(entry.ts)) item.ts = entry.ts;
+  if (entry.pinned) item.pinned = true;
+  if (entry.masked) item.masked = true;
+  if (Number.isFinite(entry.uses)) item.uses = entry.uses;
+  return item;
+}
+
 /**
  * Tìm trên TOÀN VĂN, không phải trên preview.
  *
@@ -404,6 +493,19 @@ export function togglePin(id) {
   item.pinned = !item.pinned;
   schedulePersist();
   emit();
+}
+
+/**
+ * Đếm số lần một mục được dùng lại.
+ *
+ * KHÔNG chạm vào `ts`: thứ tự "gần đây" phải phản ánh lúc COPY VÀO, không phải
+ * lúc lấy ra. Trộn hai thứ đó là danh sách nhảy loạn mỗi lần dùng một mục cũ.
+ */
+export function markUsed(id) {
+  const item = items.find((i) => i.id === id);
+  if (!item) return;
+  item.uses = (item.uses ?? 0) + 1;
+  schedulePersist();
 }
 
 /** Đánh dấu một mục là nhạy cảm: danh sách chỉ hiện dấu chấm, phải bấm mới lộ. */
