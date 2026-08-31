@@ -14,11 +14,19 @@ import { createHash } from 'node:crypto';
  * Các format mà trình quản lý mật khẩu đặt lên clipboard để báo "đừng lưu cái
  * này". KeePass, 1Password, Bitwarden... đều dùng một trong số này.
  *
- * CHƯA ĐƯỢC KIỂM CHỨNG trên Electron: clipboard.has() của Electron có đọc được
- * format tuỳ biến của Windows hay không thì tài liệu không nói rõ. Nếu không
- * đọc được, hàm isExcluded() sẽ luôn trả false và app sẽ lưu cả mật khẩu.
- * Dùng ipc 'clipboard:diagnose' (nút "Chẩn đoán" trong Cài đặt) để tự kiểm tra:
- * copy một mật khẩu từ password manager rồi xem danh sách format hiện ra.
+ * Phạm vi đã kiểm chứng — đọc kỹ trước khi tin:
+ *
+ *   'Clipboard Viewer Ignore'  ĐÃ KIỂM CHỨNG. Đặt clipboard kèm cờ này thì nội
+ *                              dung không được lưu; đối chứng cùng nội dung
+ *                              không kèm cờ thì lưu bình thường.
+ *   hai cờ còn lại             CHƯA. Tài liệu Electron không nói rõ clipboard.has()
+ *                              đọc được tới đâu trong đám format tuỳ biến của
+ *                              Windows. Nếu không đọc được thì isExcluded() lặng
+ *                              lẽ trả false và mật khẩu vẫn bị lưu.
+ *
+ * Và kể cả ba cờ đều chạy, cơ chế này chỉ bắt được password manager nào CHỊU đặt
+ * cờ. Dùng ipc 'clipboard:diagnose' (nút "Chẩn đoán" trong Cài đặt) để tự kiểm
+ * tra trên máy mình: copy một mật khẩu rồi xem `excluded` có true không.
  */
 const EXCLUDE_FLAGS = [
   'Clipboard Viewer Ignore',
@@ -46,15 +54,22 @@ export function markSelfWrite(text) {
  * `CanIncludeInClipboardHistory` mang giá trị: DWORD 0 = cấm, khác 0 = cho phép.
  * Hai cờ còn lại chỉ cần có mặt là đủ hiểu.
  */
+/**
+ * `clipboard.has()` ném lỗi với format lạ trên vài nền tảng. Không đọc được thì
+ * coi như không có — đây là câu hỏi "clipboard có mang cờ này không", nên câu
+ * trả lời an toàn khi không biết là "không thấy".
+ */
+function hasFormat(flag) {
+  try {
+    return clipboard.has(flag);
+  } catch {
+    return false;
+  }
+}
+
 export function isExcluded() {
   for (const flag of EXCLUDE_FLAGS) {
-    let present = false;
-    try {
-      present = clipboard.has(flag);
-    } catch {
-      continue; // format không hợp lệ trên nền tảng này
-    }
-    if (!present) continue;
+    if (!hasFormat(flag)) continue;
 
     if (flag === 'CanIncludeInClipboardHistory') {
       try {
@@ -77,15 +92,7 @@ export function diagnose() {
   } catch {
     /* bỏ qua */
   }
-  const flags = EXCLUDE_FLAGS.map((flag) => {
-    let present = false;
-    try {
-      present = clipboard.has(flag);
-    } catch {
-      present = false;
-    }
-    return { flag, present };
-  });
+  const flags = EXCLUDE_FLAGS.map((flag) => ({ flag, present: hasFormat(flag) }));
   return { formats, flags, excluded: isExcluded() };
 }
 
@@ -105,7 +112,7 @@ export function start({ pollMs = 300, onText }) {
 
     // Ảnh, file, HTML thuần: v1 chỉ nhận text nên bỏ qua, nhưng vẫn phải cập
     // nhật lastStamp ở trên, nếu không mỗi tick lại tưởng là vừa đổi.
-    let text = '';
+    let text;
     try {
       text = clipboard.readText();
     } catch {
@@ -142,7 +149,7 @@ export function isRunning() {
  * đổi mà không phải giải mã bitmap.
  */
 function stamp() {
-  let formats = [];
+  let formats;
   try {
     formats = clipboard.availableFormats();
   } catch {

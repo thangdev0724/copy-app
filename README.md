@@ -17,7 +17,16 @@ v1 chỉ nhận **text** — copy ảnh thì bỏ qua, không lưu.
 npm install
 npm run icons     # sinh icon tray + installer
 npm run dev       # chạy thử, có hot reload
+
+npm test          # vitest — phần logic thuần (store, dedupe, blob, index hỏng)
+npm run lint      # eslint
+npm run format    # prettier
 ```
+
+Test chạy được mà không cần binary Electron: `electron` được thay bằng stub trong
+`test/stubs/electron.js`. Nếu mạng của bạn chặn bước tải binary lúc `npm install`
+(hay gặp sau proxy có kiểm tra TLS), thì `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm install`
+vẫn đủ để chạy `npm test` và `npm run lint` — chỉ `npm run dev` là cần binary thật.
 
 ## Đóng gói
 
@@ -50,7 +59,7 @@ Tổ hợp có phím `Win` cũng không dùng được: Windows giữ phần l�
 
 ## Riêng tư — đọc trước khi dùng
 
-Lịch sử nằm ở `%APPDATA%/clipfull/history/index.json`, **chữ thường, không mã
+Lịch sử nằm ở `%APPDATA%/ClipFull/history/index.json`, **chữ thường, không mã
 hoá**. Bất cứ thứ gì bạn copy đều nằm trong đó.
 
 ClipFull bỏ qua nội dung được đánh dấu bằng các cờ loại trừ của Windows
@@ -58,11 +67,17 @@ ClipFull bỏ qua nội dung được đánh dấu bằng các cờ loại trừ
 `CanIncludeInClipboardHistory`) — đây là cách trình quản lý mật khẩu báo "đừng
 lưu cái này".
 
-**Đã kiểm chứng:** đặt clipboard kèm cờ `Clipboard Viewer Ignore` thì nội dung
-không được lưu; đối chứng cùng nội dung không kèm cờ thì lưu bình thường. Nhưng
-không phải trình quản lý mật khẩu nào cũng đặt cờ — hãy tự kiểm tra bằng nút
-**Chẩn đoán clipboard** trong Cài đặt: copy một mật khẩu rồi bấm nút đó, nếu
-`excluded` là `true` thì cơ chế đang chạy.
+**Đã kiểm chứng đến đâu:** với `Clipboard Viewer Ignore` thì có — đặt clipboard
+kèm cờ này thì nội dung không được lưu, đối chứng cùng nội dung không kèm cờ thì
+lưu bình thường. **Hai cờ còn lại chưa được kiểm chứng**: tài liệu Electron không
+nói rõ `clipboard.has()` đọc được tới đâu trong đám format tuỳ biến của Windows.
+
+Và kể cả cả ba cờ đều chạy, cơ chế này chỉ bắt được trình quản lý mật khẩu nào
+*chịu* đặt cờ. Hãy tự kiểm tra bằng nút **Chẩn đoán clipboard** trong Cài đặt:
+copy một mật khẩu rồi bấm nút đó, nếu `excluded` là `true` thì cơ chế đang chạy.
+
+Nếu `index.json` hỏng, ClipFull **không** ghi đè lên nó: file được giữ lại thành
+`index.corrupt-<thời điểm>.json` và app báo cho bạn biết nó nằm ở đâu.
 
 Ngoài ra: nút **Tạm dừng** ở khay hệ thống, và **Xoá tất cả** (giữ lại mục ghim).
 

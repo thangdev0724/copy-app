@@ -34,7 +34,7 @@ const PERSIST_DELAY = 1500;
 let items = [];
 let dirty = false;
 let timer = null;
-let listeners = [];
+const listeners = [];
 
 /**
  * Giới hạn số mục. Tiêm từ ngoài vào thay vì để store tự đọc settings — store
@@ -60,14 +60,56 @@ function ensureDirs() {
 
 /* ---------------------------------------------------------------- vòng đời */
 
+/**
+ * Chuyện xảy ra ở lần load gần nhất mà người dùng cần biết. Lấy ra một lần rồi
+ * thôi — index.js hiện dialog đúng một lần lúc khởi động.
+ */
+let loadError = null;
+
+export function takeLoadError() {
+  const error = loadError;
+  loadError = null;
+  return error;
+}
+
 export function load() {
   ensureDirs();
+  loadError = null;
+
+  let raw;
   try {
-    const raw = JSON.parse(readFileSync(indexFile(), 'utf8'));
-    items = Array.isArray(raw.items) ? raw.items : [];
+    raw = readFileSync(indexFile(), 'utf8');
   } catch {
-    items = []; // chưa có file, hoặc file hỏng: bắt đầu lại từ đầu
+    items = []; // chưa có file: lần chạy đầu, hoàn toàn bình thường
+    return items;
   }
+
+  // File rỗng thường là dấu vết của một lần tắt máy giữa chừng. Không có gì để
+  // giữ lại nên reset lặng lẽ, khỏi làm phiền.
+  if (!raw.trim()) {
+    items = [];
+    return items;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    items = Array.isArray(parsed.items) ? parsed.items : [];
+    return items;
+  } catch {
+    /* rơi xuống nhánh xử lý file hỏng bên dưới */
+  }
+
+  // File có nội dung nhưng đọc không ra. Ghi đè lên nó là xoá vĩnh viễn lịch sử
+  // của người ta trong im lặng — giữ lại bản gốc rồi mới bắt đầu lại từ đầu.
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backup = join(dir(), `index.corrupt-${stamp}.json`);
+  try {
+    renameSync(indexFile(), backup);
+    loadError = { backup };
+  } catch {
+    loadError = { backup: null }; // đổi tên không được thì ít nhất vẫn phải báo
+  }
+  items = [];
   return items;
 }
 
@@ -202,11 +244,22 @@ export function remove(id) {
 
 /** Xoá sạch, trừ những mục đã ghim — ghim là để giữ lại. */
 export function clear() {
-  const keep = items.filter((i) => i.pinned);
-  for (const item of items) if (!item.pinned) dropBlob(item);
-  items = keep;
+  const dropped = items.filter((i) => !i.pinned);
+  items = items.filter((i) => i.pinned);
+  dropBlobs(dropped);
   schedulePersist();
   emit();
+}
+
+/**
+ * Xoá blob của những mục vừa bị loại.
+ *
+ * BẮT BUỘC gọi SAU khi đã gán lại `items` — dropBlob() hỏi `items` xem còn ai
+ * dùng chung hash không, nên nếu mục cần xoá vẫn còn trong mảng thì nó luôn tự
+ * thấy chính mình và không bao giờ xoá gì cả.
+ */
+function dropBlobs(dropped) {
+  for (const item of dropped) dropBlob(item);
 }
 
 function dropBlob(item) {
@@ -229,8 +282,9 @@ function trim() {
   if (pinned.length + rest.length <= maxItems) return;
 
   const room = Math.max(0, maxItems - pinned.length);
-  for (const item of rest.slice(room)) dropBlob(item);
+  const dropped = rest.slice(room);
   items = [...pinned, ...rest.slice(0, room)];
+  dropBlobs(dropped);
 }
 
 /** Có blob mồ côi khi index hỏng; dọn lúc khởi động cho khỏi phình đĩa. */

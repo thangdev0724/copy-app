@@ -153,11 +153,15 @@
 <svelte:window on:keydown={onKey} />
 
 {#if settings}
+  <!-- Main process không có sự kiện hover ở cấp cửa sổ, nên độ mờ phải do đây báo sang. -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div
     class="app"
     class:compact={settings.density === 'compact'}
     data-theme={settings.theme}
     style="--accent: {settings.accent}; --font: {settings.fontSize}px"
+    on:mouseenter={() => api.panel.hover(true)}
+    on:mouseleave={() => api.panel.hover(false)}
   >
     {#if showSettings}
       <Settings {settings} onPatch={patch} onClose={closeSettings} />

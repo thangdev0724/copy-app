@@ -122,7 +122,7 @@
       <h3>Vị trí &amp; kích thước</h3>
       <label for="corner">Bảng hiện ở góc</label>
       <select id="corner" value={settings.corner} on:change={(e) => onPatch({ corner: e.target.value })}>
-        {#each CORNERS as [value, label]}
+        {#each CORNERS as [value, label] (value)}
           <option {value}>{label}</option>
         {/each}
       </select>

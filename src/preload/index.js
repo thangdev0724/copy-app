@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('clipfull', {
   },
   panel: {
     hide: () => invoke('panel:hide'),
+    hover: (on) => invoke('panel:hover', on),
     settingsOpen: (open) => invoke('panel:settings-open', open)
   },
   app: {

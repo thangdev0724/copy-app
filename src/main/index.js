@@ -18,6 +18,7 @@ import {
   hidePanel,
   togglePanel,
   applyAppearance,
+  setHover,
   setSettingsOpen,
   markQuitting,
   send
@@ -43,6 +44,7 @@ function main() {
     const settings = getSettings();
 
     store.load();
+    const loadError = store.takeLoadError();
     store.setMaxItems(settings.maxItems);
     store.sweepOrphanBlobs();
     store.onChange(() => send('items:changed'));
@@ -69,6 +71,22 @@ function main() {
 
     applyAutoStart(settings.openAtLogin);
     startWatching();
+
+    // Lịch sử vừa mất mà không nói gì thì người dùng tưởng app tự xoá sạch.
+    // Bản hỏng vẫn còn trên đĩa, phải chỉ cho họ biết nó nằm ở đâu.
+    if (loadError) {
+      dialog.showMessageBox({
+        type: 'warning',
+        title: 'ClipFull',
+        message: 'Không đọc được lịch sử clipboard',
+        detail: loadError.backup
+          ? `File index.json bị hỏng nên ClipFull bắt đầu lại từ đầu.\n\n` +
+            `Bản hỏng đã được giữ lại tại:\n${loadError.backup}`
+          : 'File index.json bị hỏng và cũng không đổi tên để giữ lại được. ' +
+            'ClipFull bắt đầu lại từ đầu.',
+        buttons: ['Đã hiểu']
+      });
+    }
 
     // Phím tắt hỏng mà app lại không có cửa sổ -> người dùng tưởng nó chết.
     // Phải nói ra, đúng một lần, ngay lúc khởi động.
@@ -117,7 +135,10 @@ function applyPatch(patch) {
   const next = setSettings(patch);
 
   if ('maxItems' in patch) store.setMaxItems(next.maxItems);
-  if ('opacity' in patch || 'background' in patch) applyAppearance(next);
+  // Gọi vô điều kiện: window.js giữ bản sao settings riêng để dùng lúc blur và
+  // lúc tính độ mờ. Chỉ đồng bộ khi đổi opacity/background là để nó ôm bản cũ —
+  // tắt "tự ẩn khi bấm ra ngoài" mà panel vẫn ẩn cho tới lần mở kế.
+  applyAppearance(next);
   if ('openAtLogin' in patch) applyAutoStart(next.openAtLogin);
   if ('paused' in patch || (('pollMs' in patch) && !next.paused)) startWatching();
 
@@ -179,6 +200,7 @@ function registerIpc() {
   ipcMain.handle('clipboard:diagnose', () => watcher.diagnose());
 
   ipcMain.handle('panel:hide', () => hidePanel());
+  ipcMain.handle('panel:hover', (_e, on) => setHover(on));
   ipcMain.handle('panel:settings-open', (_e, open) => setSettingsOpen(open));
   ipcMain.handle('app:quit', () => quit());
   ipcMain.handle('app:paths', () => ({ userData: app.getPath('userData') }));

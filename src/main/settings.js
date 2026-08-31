@@ -44,6 +44,11 @@ export const DEFAULTS = {
 
 const MIN_OPACITY = 0.15;
 
+/** Khớp với minWidth/minHeight của BrowserWindow trong window.js. */
+const MIN_PANEL_WIDTH = 620;
+const MIN_PANEL_HEIGHT = 380;
+const MAX_PANEL = 4000;
+
 let cache = null;
 
 function file() {
@@ -68,14 +73,38 @@ export function setSettings(patch) {
   if (patch.hotkeys) next.hotkeys = { ...getSettings().hotkeys, ...patch.hotkeys };
 
   // Chặn dưới để panel không bao giờ mờ tới mức không thấy mà bấm.
-  next.opacity = Math.max(MIN_OPACITY, Math.min(1, Number(next.opacity) || 1));
-  next.pollMs = Math.max(100, Math.min(2000, Number(next.pollMs) || DEFAULTS.pollMs));
-  next.fontSize = Math.max(11, Math.min(22, Number(next.fontSize) || DEFAULTS.fontSize));
-  next.maxItems = Math.max(0, Number(next.maxItems) || 0);
+  next.opacity = clamp(next.opacity, MIN_OPACITY, 1, DEFAULTS.opacity);
+  next.pollMs = Math.round(clamp(next.pollMs, 100, 2000, DEFAULTS.pollMs));
+  next.fontSize = Math.round(clamp(next.fontSize, 11, 22, DEFAULTS.fontSize));
+
+  // 0 ở đây KHÔNG phải giá trị hỏng — nó có nghĩa là "không giới hạn".
+  next.maxItems = Math.round(clamp(next.maxItems, 0, Number.MAX_SAFE_INTEGER, 0));
+
+  // Ô nhập kích thước cho gõ tay, mà gõ 20 vào ô "Rộng" thì panel biến mất khỏi
+  // tầm với — Electron tự chặn ở minWidth nhưng settings.json vẫn giữ số bậy.
+  next.panelWidth = Math.round(
+    clamp(next.panelWidth, MIN_PANEL_WIDTH, MAX_PANEL, DEFAULTS.panelWidth)
+  );
+  next.panelHeight = Math.round(
+    clamp(next.panelHeight, MIN_PANEL_HEIGHT, MAX_PANEL, DEFAULTS.panelHeight)
+  );
 
   cache = next;
   persist();
   return cache;
+}
+
+/**
+ * Kẹp một số vào khoảng, rơi về `fallback` nếu không đọc ra số.
+ *
+ * Phải tách riêng "không phải số" khỏi "bằng 0": viết `Number(v) || fallback`
+ * là gộp hai chuyện đó làm một, và 0 — một giá trị hợp lệ — bị đánh đồng với
+ * rác rồi thay bằng mặc định.
+ */
+function clamp(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
 }
 
 function persist() {
